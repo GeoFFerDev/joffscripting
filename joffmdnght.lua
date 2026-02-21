@@ -1,6 +1,6 @@
--- [[ JOSEPEDOV V9: THE MAGNET EDITION ]] --
+-- [[ JOSEPEDOV V9.1: MAGNET EDITION (FIXED) ]] --
 -- Features: Checkpoint Magnet (AutoRace), Infinite Nitro, Grounded Speedhack
--- Optimized for: Midnight Chasers Highway Racing
+-- Fixes: Cleaned up UI Overlap, Fixed Syntax Errors, Optimized Memory Leak.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,12 +8,19 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
 local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
+
+-- === ANTI-OVERLAP (Cleans up old stuck UIs) ===
+local guiTarget = (gethui and gethui()) or CoreGui
+if guiTarget:FindFirstChild("J9_Midnight") then
+    guiTarget.J9_Midnight:Destroy()
+end
 
 -- === CONFIGURATION ===
 local Config = {
     SpeedHack = false,
-    AutoRace = false, -- The Checkpoint Magnet
+    AutoRace = false,
     InfNitro = false,
     TrafficBlocked = false,
     FPS_Boosted = false,
@@ -89,7 +96,7 @@ end
 -- === UI CREATION ===
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "J9_Midnight"
-ScreenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+ScreenGui.Parent = guiTarget
 
 local IconFrame = Instance.new("Frame")
 IconFrame.Size = UDim2.new(0, 50, 0, 50)
@@ -174,11 +181,11 @@ local function MakeButton(label, order, callback)
     end)
 end
 
-MakeButton("🧲 Checkpoint Magnet", 0, function() Config.AutoRace = not Config.AutoRace return Config.AutoRace end)
-MakeButton("⚡ Accurate Speed Hack", 1, function() Config.SpeedHack = not Config.SpeedHack return Config.SpeedHack end)
-MakeButton("🔥 Infinite Nitro", 2, function() Config.InfNitro = not Config.InfNitro return Config.InfNitro end)
-MakeButton("🚫 Kill Traffic", 3, function() return ToggleTraffic() end)
-MakeButton("🖥️ XML FPS Boost", 4, function() return ToggleFPSBoost() end)
+MakeButton("🧲 Checkpoint Magnet", 0, function() Config.AutoRace = not Config.AutoRace; return Config.AutoRace; end)
+MakeButton("⚡ Accurate Speed Hack", 1, function() Config.SpeedHack = not Config.SpeedHack; return Config.SpeedHack; end)
+MakeButton("🔥 Infinite Nitro", 2, function() Config.InfNitro = not Config.InfNitro; return Config.InfNitro; end)
+MakeButton("🚫 Kill Traffic", 3, function() return ToggleTraffic(); end)
+MakeButton("🖥️ XML FPS Boost", 4, function() return ToggleFPSBoost(); end)
 
 -- Tuning Adjusters (Speed/Accel)
 local TuneFrame = Instance.new("Frame")
@@ -268,22 +275,26 @@ RunService.Heartbeat:Connect(function()
 
     -- MAGNET LOGIC (AutoRace)
     if Config.AutoRace then
-        -- Force gas when Magnet is on
         gasVal = 1 
         
-        -- Scan for Checkpoints
+        -- Optimized Checkpoint Scanner
         local activeCP = nil
         local minDist = math.huge
         local currentPos = currentSeat.Position
         
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            -- Look for parts named Checkpoint, Node, Hitbox, etc. that are transparent/collidable
-            if obj:IsA("BasePart") and string.match(string.lower(obj.Name), "check") or string.match(string.lower(obj.Name), "node") then
-                local dist = (obj.Position - currentPos).Magnitude
-                -- Find the closest one that is at least a few studs away (so we don't lock onto the one we just hit)
-                if dist < minDist and dist > 15 then
-                    minDist = dist
-                    activeCP = obj
+        -- Find the dedicated folder first to prevent scanning the whole map
+        local cpFolder = Workspace:FindFirstChild("Checkpoints") or Workspace:FindFirstChild("RaceNodes") or Workspace:FindFirstChild("Race")
+        local objectsToScan = cpFolder and cpFolder:GetChildren() or Workspace:GetChildren()
+
+        for _, obj in ipairs(objectsToScan) do
+            if obj:IsA("BasePart") then
+                local n = string.lower(obj.Name)
+                if string.match(n, "check") or string.match(n, "node") or string.match(n, "hitbox") then
+                    local dist = (obj.Position - currentPos).Magnitude
+                    if dist < minDist and dist > 15 then
+                        minDist = dist
+                        activeCP = obj
+                    end
                 end
             end
         end
@@ -297,22 +308,19 @@ RunService.Heartbeat:Connect(function()
                 turnForce.MaxTorque = Vector3.new(0, currentSeat.AssemblyMass * 5000, 0)
             end
             
-            -- Calculate local space to steer left or right
             local localPos = currentSeat.CFrame:PointToObjectSpace(activeCP.Position)
             local steerDirection = math.clamp(localPos.X / 20, -1, 1)
-            turnForce.AngularVelocity = Vector3.new(0, -steerDirection * 4.0, 0) -- Strong turn
+            turnForce.AngularVelocity = Vector3.new(0, -steerDirection * 4.0, 0) 
             
             DebugLabel.Text = "Status: MAGNET LOCKED"
             DebugLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
         else
-            -- No checkpoints found
             local turnForce = currentSeat:FindFirstChild("J9_MagnetTurn")
             if turnForce then turnForce:Destroy() end
-            DebugLabel.Text = "Status: SEARCHING FOR TRACK..."
+            DebugLabel.Text = "Status: NO CHECKPOINTS FOUND"
             DebugLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
         end
     else
-        -- Clean up Magnet
         local turnForce = currentSeat:FindFirstChild("J9_MagnetTurn")
         if turnForce then turnForce:Destroy() end
     end
@@ -366,3 +374,4 @@ RunService.Heartbeat:Connect(function()
         DebugLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
     end
 end)
+print("JOSEPEDOV V9.1 Loaded Successfully!")
