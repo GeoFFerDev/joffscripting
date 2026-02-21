@@ -1,6 +1,6 @@
--- [[ JOSEPEDOV V7: PURE RACING EDITION ]] --
--- Features: A-Chassis Velocity Scaling, Ground Detection, FPS Boost, Traffic Kill
--- Fixes: Removed floaty VectorForce. Car now grips the road and handles accurately.
+-- [[ JOSEPEDOV V9: THE MAGNET EDITION ]] --
+-- Features: Checkpoint Magnet (AutoRace), Infinite Nitro, Grounded Speedhack
+-- Optimized for: Midnight Chasers Highway Racing
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,11 +13,12 @@ local player = Players.LocalPlayer
 -- === CONFIGURATION ===
 local Config = {
     SpeedHack = false,
+    AutoRace = false, -- The Checkpoint Magnet
+    InfNitro = false,
     TrafficBlocked = false,
     FPS_Boosted = false,
-    FullBright = false,
-    Acceleration = 3.0,  -- How fast it reaches top speed
-    MaxSpeed = 400,      -- Top speed in studs per second (approx 280 MPH)
+    Acceleration = 3.0,  
+    MaxSpeed = 400,      
     Deadzone = 0.1
 }
 
@@ -41,20 +42,6 @@ local function ToggleTraffic()
         if event then for _, c in pairs(getconnections(event.OnClientEvent)) do c:Enable() end end
     end
     return Config.TrafficBlocked
-end
-
-local function ToggleFullBright()
-    Config.FullBright = not Config.FullBright
-    if Config.FullBright then
-        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
-        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
-        Lighting.ClockTime = 12
-    else
-        Lighting.Ambient = OriginalAmbient
-        Lighting.OutdoorAmbient = OriginalAmbient
-        Lighting.ClockTime = OriginalClock
-    end
-    return Config.FullBright
 end
 
 local function ProcessObjectForFPS(v, state)
@@ -101,7 +88,7 @@ end
 
 -- === UI CREATION ===
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "J7_Midnight"
+ScreenGui.Name = "J9_Midnight"
 ScreenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
 local IconFrame = Instance.new("Frame")
@@ -114,8 +101,8 @@ IconFrame.Parent = ScreenGui
 
 local IconButton = Instance.new("TextButton")
 IconButton.Size = UDim2.new(1, 0, 1, 0)
-IconButton.BackgroundColor3 = Color3.fromRGB(255, 100, 0)
-IconButton.Text = "J7"
+IconButton.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+IconButton.Text = "J9"
 IconButton.TextColor3 = Color3.fromRGB(0, 0, 0)
 IconButton.Font = Enum.Font.GothamBlack
 IconButton.TextSize = 18
@@ -124,11 +111,11 @@ Instance.new("UICorner", IconButton).CornerRadius = UDim.new(0, 25)
 MakeDraggable(IconFrame)
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 220, 0, 260)
+MainFrame.Size = UDim2.new(0, 220, 0, 400) 
 MainFrame.Position = UDim2.new(0.1, 0, 0.2, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 2
-MainFrame.BorderColor3 = Color3.fromRGB(255, 100, 0)
+MainFrame.BorderColor3 = Color3.fromRGB(0, 255, 150)
 MainFrame.Active = true
 MainFrame.Parent = ScreenGui
 MakeDraggable(MainFrame)
@@ -142,8 +129,8 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(0.7, 0, 1, 0)
 Title.Position = UDim2.new(0.05, 0, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "J7: PURE RACING"
-Title.TextColor3 = Color3.fromRGB(255, 100, 0)
+Title.Text = "J9: MAGNET EDITION"
+Title.TextColor3 = Color3.fromRGB(0, 255, 150)
 Title.Font = Enum.Font.GothamBlack
 Title.TextSize = 14
 Title.TextXAlignment = Enum.TextXAlignment.Left
@@ -168,10 +155,11 @@ Content.Position = UDim2.new(0, 0, 0, 30)
 Content.BackgroundTransparency = 1
 Content.Parent = MainFrame
 
+-- Toggles
 local function MakeButton(label, order, callback)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0.9, 0, 0, 35)
-    b.Position = UDim2.new(0.05, 0, 0, 10 + (order * 40))
+    b.Size = UDim2.new(0.9, 0, 0, 30)
+    b.Position = UDim2.new(0.05, 0, 0, 10 + (order * 35))
     b.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
     b.Text = label .. ": OFF"
     b.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -182,32 +170,78 @@ local function MakeButton(label, order, callback)
     b.MouseButton1Click:Connect(function()
         local s = callback()
         b.Text = label .. ": " .. (s and "ON" or "OFF")
-        b.BackgroundColor3 = s and Color3.fromRGB(255, 100, 0) or Color3.fromRGB(40, 40, 45)
+        b.BackgroundColor3 = s and Color3.fromRGB(0, 255, 150) or Color3.fromRGB(40, 40, 45)
     end)
 end
 
-MakeButton("⚡ Accurate Speed Hack", 0, function() Config.SpeedHack = not Config.SpeedHack return Config.SpeedHack end)
-MakeButton("🚫 Kill Traffic", 1, function() return ToggleTraffic() end)
-MakeButton("☀️ Full Bright", 2, function() return ToggleFullBright() end)
-MakeButton("🖥️ XML FPS Boost", 3, function() return ToggleFPSBoost() end)
+MakeButton("🧲 Checkpoint Magnet", 0, function() Config.AutoRace = not Config.AutoRace return Config.AutoRace end)
+MakeButton("⚡ Accurate Speed Hack", 1, function() Config.SpeedHack = not Config.SpeedHack return Config.SpeedHack end)
+MakeButton("🔥 Infinite Nitro", 2, function() Config.InfNitro = not Config.InfNitro return Config.InfNitro end)
+MakeButton("🚫 Kill Traffic", 3, function() return ToggleTraffic() end)
+MakeButton("🖥️ XML FPS Boost", 4, function() return ToggleFPSBoost() end)
 
+-- Tuning Adjusters (Speed/Accel)
+local TuneFrame = Instance.new("Frame")
+TuneFrame.Size = UDim2.new(0.9, 0, 0, 100)
+TuneFrame.Position = UDim2.new(0.05, 0, 0, 190)
+TuneFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+TuneFrame.Parent = Content
+Instance.new("UICorner", TuneFrame).CornerRadius = UDim.new(0, 6)
+
+-- Speed
+local SpdLabel = Instance.new("TextLabel")
+SpdLabel.Text = "Top Speed: " .. Config.MaxSpeed
+SpdLabel.Size = UDim2.new(1, 0, 0, 20)
+SpdLabel.Position = UDim2.new(0, 0, 0.05, 0)
+SpdLabel.BackgroundTransparency = 1
+SpdLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpdLabel.Font = Enum.Font.GothamBold
+SpdLabel.TextSize = 12
+SpdLabel.Parent = TuneFrame
+
+local SpdMin = Instance.new("TextButton"); SpdMin.Text = "<"; SpdMin.Size = UDim2.new(0.3, 0, 0, 25); SpdMin.Position = UDim2.new(0.1, 0, 0.25, 0); SpdMin.BackgroundColor3 = Color3.fromRGB(50,50,50); SpdMin.TextColor3 = Color3.fromRGB(255,255,255); SpdMin.Parent = TuneFrame
+local SpdMax = Instance.new("TextButton"); SpdMax.Text = ">"; SpdMax.Size = UDim2.new(0.3, 0, 0, 25); SpdMax.Position = UDim2.new(0.6, 0, 0.25, 0); SpdMax.BackgroundColor3 = Color3.fromRGB(50,50,50); SpdMax.TextColor3 = Color3.fromRGB(255,255,255); SpdMax.Parent = TuneFrame
+Instance.new("UICorner", SpdMin); Instance.new("UICorner", SpdMax)
+
+SpdMin.MouseButton1Click:Connect(function() Config.MaxSpeed = math.max(100, Config.MaxSpeed - 50); SpdLabel.Text = "Top Speed: " .. Config.MaxSpeed end)
+SpdMax.MouseButton1Click:Connect(function() Config.MaxSpeed = Config.MaxSpeed + 50; SpdLabel.Text = "Top Speed: " .. Config.MaxSpeed end)
+
+-- Acceleration
+local AccLabel = Instance.new("TextLabel")
+AccLabel.Text = "Accel (Grip): " .. Config.Acceleration
+AccLabel.Size = UDim2.new(1, 0, 0, 20)
+AccLabel.Position = UDim2.new(0, 0, 0.55, 0)
+AccLabel.BackgroundTransparency = 1
+AccLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+AccLabel.Font = Enum.Font.GothamBold
+AccLabel.TextSize = 12
+AccLabel.Parent = TuneFrame
+
+local AccMin = Instance.new("TextButton"); AccMin.Text = "<"; AccMin.Size = UDim2.new(0.3, 0, 0, 25); AccMin.Position = UDim2.new(0.1, 0, 0.75, 0); AccMin.BackgroundColor3 = Color3.fromRGB(50,50,50); AccMin.TextColor3 = Color3.fromRGB(255,255,255); AccMin.Parent = TuneFrame
+local AccMax = Instance.new("TextButton"); AccMax.Text = ">"; AccMax.Size = UDim2.new(0.3, 0, 0, 25); AccMax.Position = UDim2.new(0.6, 0, 0.75, 0); AccMax.BackgroundColor3 = Color3.fromRGB(50,50,50); AccMax.TextColor3 = Color3.fromRGB(255,255,255); AccMax.Parent = TuneFrame
+Instance.new("UICorner", AccMin); Instance.new("UICorner", AccMax)
+
+AccMin.MouseButton1Click:Connect(function() Config.Acceleration = math.max(0.5, Config.Acceleration - 0.5); AccLabel.Text = "Accel (Grip): " .. Config.Acceleration end)
+AccMax.MouseButton1Click:Connect(function() Config.Acceleration = Config.Acceleration + 0.5; AccLabel.Text = "Accel (Grip): " .. Config.Acceleration end)
+
+-- Status
 local DebugLabel = Instance.new("TextLabel")
 DebugLabel.Text = "Status: IDLE"
 DebugLabel.Size = UDim2.new(1, 0, 0, 20)
-DebugLabel.Position = UDim2.new(0, 0, 0, 180)
+DebugLabel.Position = UDim2.new(0, 0, 0, 305)
 DebugLabel.BackgroundTransparency = 1
 DebugLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
 DebugLabel.Font = Enum.Font.Code
 DebugLabel.TextSize = 12
 DebugLabel.Parent = Content
 
--- === 2. TRUE PHYSICS SPEEDHACK ===
-RunService.Heartbeat:Connect(function(deltaTime)
+-- === 2. TRUE PHYSICS & MAGNET LOOP ===
+RunService.Heartbeat:Connect(function()
     if not player.Character or not player.Character:FindFirstChild("Humanoid") then return end
     currentSeat = player.Character.Humanoid.SeatPart
     if not currentSeat or not currentSeat:IsA("VehicleSeat") then return end
     
-    -- Read A-Chassis
+    -- Read A-Chassis Input
     local gasVal = currentSeat.ThrottleFloat or currentSeat.Throttle or 0
     local brakeVal = 0
     local gearVal = 1
@@ -218,14 +252,75 @@ RunService.Heartbeat:Connect(function(deltaTime)
         if vals:FindFirstChild("Throttle") then gasVal = vals.Throttle.Value end
         if vals:FindFirstChild("Brake") then brakeVal = vals.Brake.Value end
         if vals:FindFirstChild("Gear") then gearVal = vals.Gear.Value end
+        
+        -- INFINITE NITRO
+        if Config.InfNitro then
+            for _, nName in ipairs({"Nitro", "N2O", "Boost", "Nitrous"}) do
+                local nVal = vals:FindFirstChild(nName)
+                if nVal and (nVal:IsA("NumberValue") or nVal:IsA("IntValue")) then
+                    nVal.Value = 100 
+                end
+            end
+        end
     end
 
     local isReversing = (gearVal == -1) or (brakeVal > 0.1) or (gasVal < -0.1)
 
-    if Config.SpeedHack then
-        -- GROUND CHECK: Only apply speed if tires are touching the road
+    -- MAGNET LOGIC (AutoRace)
+    if Config.AutoRace then
+        -- Force gas when Magnet is on
+        gasVal = 1 
+        
+        -- Scan for Checkpoints
+        local activeCP = nil
+        local minDist = math.huge
+        local currentPos = currentSeat.Position
+        
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            -- Look for parts named Checkpoint, Node, Hitbox, etc. that are transparent/collidable
+            if obj:IsA("BasePart") and string.match(string.lower(obj.Name), "check") or string.match(string.lower(obj.Name), "node") then
+                local dist = (obj.Position - currentPos).Magnitude
+                -- Find the closest one that is at least a few studs away (so we don't lock onto the one we just hit)
+                if dist < minDist and dist > 15 then
+                    minDist = dist
+                    activeCP = obj
+                end
+            end
+        end
+
+        -- Steer towards Checkpoint
+        if activeCP then
+            local turnForce = currentSeat:FindFirstChild("J9_MagnetTurn")
+            if not turnForce then
+                turnForce = Instance.new("BodyAngularVelocity", currentSeat)
+                turnForce.Name = "J9_MagnetTurn"
+                turnForce.MaxTorque = Vector3.new(0, currentSeat.AssemblyMass * 5000, 0)
+            end
+            
+            -- Calculate local space to steer left or right
+            local localPos = currentSeat.CFrame:PointToObjectSpace(activeCP.Position)
+            local steerDirection = math.clamp(localPos.X / 20, -1, 1)
+            turnForce.AngularVelocity = Vector3.new(0, -steerDirection * 4.0, 0) -- Strong turn
+            
+            DebugLabel.Text = "Status: MAGNET LOCKED"
+            DebugLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+        else
+            -- No checkpoints found
+            local turnForce = currentSeat:FindFirstChild("J9_MagnetTurn")
+            if turnForce then turnForce:Destroy() end
+            DebugLabel.Text = "Status: SEARCHING FOR TRACK..."
+            DebugLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+        end
+    else
+        -- Clean up Magnet
+        local turnForce = currentSeat:FindFirstChild("J9_MagnetTurn")
+        if turnForce then turnForce:Destroy() end
+    end
+
+    -- SPEEDHACK LOGIC
+    if Config.SpeedHack or Config.AutoRace then
         local origin = currentSeat.Position
-        local direction = Vector3.new(0, -5, 0) -- Cast 5 studs straight down
+        local direction = Vector3.new(0, -5, 0) 
         local rayParams = RaycastParams.new()
         rayParams.FilterDescendantsInstances = {player.Character, currentSeat.Parent}
         rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -234,34 +329,39 @@ RunService.Heartbeat:Connect(function(deltaTime)
 
         if gasVal > Config.Deadzone and not isReversing then
             if isGrounded then
-                -- Accurate Velocity Scaling
                 local currentVelocity = currentSeat.AssemblyLinearVelocity
                 local lookVector = currentSeat.CFrame.LookVector
                 local currentSpeed = currentVelocity.Magnitude
                 
-                -- Only boost if under Max Speed
                 if currentSpeed < Config.MaxSpeed then
-                    -- Smoothly add speed in the direction the car is pointing
                     currentSeat.AssemblyLinearVelocity = currentVelocity + (lookVector * Config.Acceleration)
-                    DebugLabel.Text = "Status: BOOSTING (Grounded)"
-                    DebugLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                    if not Config.AutoRace then
+                        DebugLabel.Text = "Status: BOOSTING (Grounded)"
+                        DebugLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                    end
                 else
-                    DebugLabel.Text = "Status: MAX SPEED REACHED"
-                    DebugLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                    if not Config.AutoRace then
+                        DebugLabel.Text = "Status: MAX SPEED REACHED"
+                        DebugLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                    end
                 end
             else
-                DebugLabel.Text = "Status: AIRBORNE (Power Cut)"
-                DebugLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+                if not Config.AutoRace then
+                    DebugLabel.Text = "Status: AIRBORNE (Power Cut)"
+                    DebugLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+                end
             end
         else
-            if isReversing then
-                DebugLabel.Text = "Status: REVERSING"
-            else
-                DebugLabel.Text = "Status: IDLE"
+            if not Config.AutoRace then
+                if isReversing then
+                    DebugLabel.Text = "Status: REVERSING"
+                else
+                    DebugLabel.Text = "Status: IDLE"
+                end
+                DebugLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
             end
-            DebugLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
         end
-    else
+    elseif not Config.AutoRace then
         DebugLabel.Text = "Status: SCRIPT OFF"
         DebugLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
     end
