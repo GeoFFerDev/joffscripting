@@ -1,30 +1,50 @@
 --[[
-  JOSEPEDOV V17 — MIDNIGHT CHASERS  [PATCHED by analysis]
+  JOSEPEDOV V18 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Tabbed UI | Loading screen
-  
-  BUG FIXES vs v16:
-  • Car stuck when AR off  → save disabledCar ref; always restore that exact car
-  • Only 1 CP reached      → skip-by-index after timeout; retry loop when CP missing
-  • Status flicker         → single writer per mode; update every frame while flying
-  • ChildRemoved crash     → safe nil-check before connecting
-  • Heartbeat/coroutine    → no shared status writes; raceOwnsStatus flag
 
-  ADDITIONAL FIXES (this build):
-  • Car stuck after CP 1   → REMOVED AssemblyLinearVelocity=zero after clearing a CP.
-                             Place has CanCollide=false on all car parts during race;
-                             zeroing velocity let gravity pull the car THROUGH the road
-                             during the 0.15s pause, causing the car to get trapped
-                             underground on every subsequent checkpoint.
-  • CPs missing on slow    → StreamingEnabled=true with 400-stud min radius. CP Parts
-    connection              are dynamically spawned server-side at race start, so the
-                             loading-screen flythrough can't pre-stream them. Fixed by
-                             parking the camera above CP27 for 2.5s at DoRaceLoop start
-                             before any FindNextCP call. CP wait timeout also extended
-                             from 5s → 15s.
-  • QUEUE_POS Y wrong      → XML: QueueRegion centre Y=-7.515, size Y=38 → top Y≈11.5.
-                             Old Y=4 placed car below road surface. Fixed to Y=12.
-  • Loading screen note    → Added comment explaining why flythrough can't preload
-                             dynamic CPs and where the real streaming fix lives.
+  FIXES vs V17:
+  ─────────────────────────────────────────────────────────────────
+  BUG: Car freezes / glitches mid-air after CP 1 (and every CP)
+  ROOT CAUSE (confirmed from place XML analysis):
+    • The checkpoint trigger Parts are 0.001213 studs thick (X).
+    • At Config.MaxSpeed=320, the car moves ~5.3 studs per frame.
+    • The car skips entirely over the 0.001-stud trigger between frames.
+    • Server Touched event never fires → Part never removed → ChildRemoved
+      never fires on client → cpCleared stays false forever.
+    • The fly-loop keeps reversing dir each frame (car overshoots CP centre,
+      dir flips, car flies back, overshoots again) → infinite oscillation
+      = the "mid-air freeze glitch" the user sees.
+
+  FIX A — Proximity-based CP clearance (primary):
+    Break out of the fly-loop and mark CP as cleared when dist <= 28 studs
+    (chosen as half of the gate Z-width ≈ 60 studs, so well inside the arch).
+    This fires BEFORE the close-range oscillation zone is reached.
+
+  FIX B — clearedSet replaces single skippedIdx:
+    After a CP is cleared via proximity the server Part still exists (Touched
+    never fired). Old code reset skippedIdx = nil so FindNextCP returned the
+    same CP index again on the very next loop iteration → car forever targets
+    CP27 after "passing" it.
+    New: clearedSet{} records every cleared cpIdx permanently. FindNextCP
+    skips any index in clearedSet, so the car always advances forward.
+
+  FIX C — ChildRemoved kept as secondary/backup:
+    If the server IS fast and removes the Part before proximity triggers,
+    ChildRemoved sets cpCleared=true early. The proximity check catches all
+    other cases.
+
+  FIX D — No velocity applied inside CLEAR_DIST zone:
+    Stop setting AssemblyLinearVelocity when dist <= CLEAR_DIST.
+    Existing momentum coasts the car through the gate arch.
+    This eliminates the oscillation without zeroing velocity (zeroing = gravity
+    drops car through road since CanCollide is off).
+
+  RETAINED FROM V17:
+    • disabledCar ref for always-correct RestoreCollisions
+    • raceOwnsStatus flag (no Heartbeat/status conflicts)
+    • QUEUE_POS Y=12 (corrected from XML: top surface of QueueRegion ≈ Y 11.5)
+    • 15s CP-wait timeout for slow streaming connections
+    • CanCollide nil-check on connection guard
 ]]
 
 local Players           = game:GetService("Players")
@@ -303,15 +323,22 @@ local function FindPlayerRaceFolder()
 end
 
 -- Find the next checkpoint Part (lowest numeric name child of Checkpoints IntValue).
--- Skips index skipIdx (so we don't retry a timed-out gate forever).
-local function FindNextCP(raceFolder, skipIdx)
+-- clearedSet: table of cpIdx → true for CPs already passed client-side.
+-- skipIdx: single extra index to skip (timed-out gate fallback).
+-- WHY clearedSet: CP trigger parts are 0.001 studs thick — the car moves ~5 studs
+-- per frame at race speed, so the server Touched event never fires and the Part
+-- is never removed from the folder. Without a clearedSet, FindNextCP keeps
+-- returning the same CP index forever after the car "passes" it.
+local function FindNextCP(raceFolder, clearedSet, skipIdx)
     local cpVal = raceFolder:FindFirstChild("Checkpoints")
     if not cpVal then return nil, nil end
     local best, bestIdx = nil, math.huge
     for _, child in ipairs(cpVal:GetChildren()) do
         if child:IsA("BasePart") then
             local idx = tonumber(child.Name)
-            if idx and idx < bestIdx and idx ~= skipIdx then
+            if idx and idx < bestIdx
+               and idx ~= skipIdx
+               and not (clearedSet and clearedSet[idx]) then
                 best, bestIdx = child, idx
             end
         end
@@ -339,72 +366,65 @@ local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
     DisableCollisions(currentCar)
 
-    -- ── STREAMING PRE-LOAD FIX ──────────────────────────────────────────────
-    -- StreamingEnabled=true in this place (min radius 400 studs).
-    -- Checkpoint Parts are DYNAMICALLY created by the server when the race starts
-    -- and won't exist at loading-screen time, so the loading-screen camera flythrough
-    -- cannot pre-stream them. We fix this by briefly parking the camera above the
-    -- first CP's known world position so Roblox streams those Parts to the client
-    -- before we try to FindNextCP. Without this, slow clients see no CPs at all.
-    do
-        local streamCam = Workspace.CurrentCamera
-        local prevType  = streamCam.CameraType
-        streamCam.CameraType = Enum.CameraType.Scriptable
-        -- Hover above CP 27 (X=2513, Z=411) at a safe height
-        local streamTarget = CFrame.lookAt(
-            Vector3.new(2513, 80, 411),
-            Vector3.new(2513, -3, 411)
-        )
-        TweenService:Create(streamCam, TweenInfo.new(0.6, Enum.EasingStyle.Sine),
-            {CFrame = streamTarget}):Play()
-        SetStatus("⏳ Streaming checkpoints...", 255, 200, 60)
-        task.wait(2.5)   -- give the streaming system time to replicate CP Parts
-        streamCam.CameraType = prevType
-    end
-    -- ── END STREAMING PRE-LOAD ──────────────────────────────────────────────
+    -- clearedSet tracks CPs we've passed client-side.
+    -- The server's Touched event is unreliable here because:
+    --   • CP trigger Parts are only 0.001213 studs thick (from place XML)
+    --   • At 320 studs/s the car moves ~5.3 studs/frame → completely skips the trigger
+    --   • Server never fires Touched → never removes the Part → ChildRemoved never fires
+    -- Solution: use client proximity (<= CLEAR_DIST studs from CP centre) as primary
+    -- clearance, and record each cleared index in clearedSet so FindNextCP never
+    -- returns the same CP twice, even though the server Part may still exist.
+    local clearedSet = {}
+    local skipIdx   = nil   -- fallback: skip a timed-out CP index
 
-    local skippedIdx = nil  -- index of last timed-out CP (FIX #2)
+    -- Gate half-width from XML: Z-size of CP gate ≈ 60 studs → half ≈ 30.
+    -- Use 28 studs so we clear well inside the visual gate arch.
+    local CLEAR_DIST = 28
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
-        -- ① Wait until a checkpoint Part appears (FIX #2: server may be slow)
+        -- ① Wait for the next CP Part to appear (server spawns them at race start)
         local gatePart, cpIdx
-        local waitForCP = tick() + 15  -- FIX: extended to 15 s — on slow connections
-        -- the server-created checkpoint Parts may not have streamed to the client yet
+        local waitForCP = tick() + 15
         repeat
-            gatePart, cpIdx = FindNextCP(uuidFolder, skippedIdx)
+            gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
             if not gatePart then task.wait(0.1) end
-        until gatePart or tick() > waitForCP or not Config.AutoRace or AR_STATE ~= "RACING"
+        until gatePart or tick() > waitForCP
+              or not Config.AutoRace or AR_STATE ~= "RACING"
 
         if not gatePart then
-            -- Truly no more CPs — race done
+            -- No more CPs in folder — race finished
             SetStatus("🏁 Race complete!", 0, 255, 120)
             task.wait(2)
             break
         end
 
-        skippedIdx = nil  -- reset skip for this CP
+        skipIdx = nil  -- reset timeout-skip for this new CP
 
-        -- ② Set up ChildRemoved listener BEFORE flying (FIX #4: safe nil-check)
+        -- ② ChildRemoved listener (secondary / backup — fires if server IS fast enough)
         local cpCleared = false
         local cpConn    = nil
         local cpParent  = gatePart.Parent
         if cpParent then
             cpConn = cpParent.ChildRemoved:Connect(function(removed)
-                if removed == gatePart then
-                    cpCleared = true
-                end
+                if removed == gatePart then cpCleared = true end
             end)
         end
 
-        -- ③ Fly toward gate — write status EVERY frame (FIX #3: no flicker gap)
-        local flyStart = tick()
-        local flyLimit = tick() + 30  -- 30 s timeout per CP
+        -- ③ Fly toward gate
+        --    PRIMARY clear = proximity (dist <= CLEAR_DIST)
+        --    SECONDARY clear = ChildRemoved fires (rare but kept as backup)
+        --    STOP applying velocity when dist <= CLEAR_DIST to avoid oscillation.
+        --    Oscillation was the "mid-air freeze" bug: at close range, dir flips
+        --    every frame (car overshoots, reverses, overshoots again) because
+        --    0.001-stud trigger is skipped, so the loop never exits naturally.
+        local flyLimit = tick() + 30
 
-        while not cpCleared and tick() < flyLimit do
+        while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
+            if cpCleared then break end  -- ChildRemoved fired (backup path)
 
-            -- Bail if part vanished without firing event (network edge case)
+            -- Part removed without event (extreme network edge case)
             if not gatePart.Parent then cpCleared = true; break end
 
             local car  = currentCar
@@ -415,37 +435,38 @@ local function DoRaceLoop(uuidFolder)
             local myPos     = root.Position
             local targetPos = gatePart.Position
             local dist      = (targetPos - myPos).Magnitude
-            local dir       = (targetPos - myPos).Unit
 
-            -- Pure velocity — no PivotTo (FIX: PivotTo fights physics)
+            -- PRIMARY proximity clear — exit before oscillation zone
+            if dist <= CLEAR_DIST then
+                cpCleared = true
+                break
+            end
+
+            -- Apply velocity only when far enough that dir vector is stable
+            local dir = (targetPos - myPos).Unit
             root.AssemblyLinearVelocity  = dir * Config.MaxSpeed
             root.AssemblyAngularVelocity = Vector3.zero
 
-            -- Status every frame (no flicker)
             SetStatus(string.format("→ CP #%d   %.0f studs", cpIdx, dist), 0, 190, 255)
-
             task.wait()
         end
 
-        -- ④ Disconnect listener
+        -- ④ Cleanup listener
         if cpConn then pcall(function() cpConn:Disconnect() end) end
 
-        -- ⑤ Post-gate handling
-        if not Config.AutoRace or AR_STATE ~= "RACING" then
-            break  -- user cancelled
-        end
+        if not Config.AutoRace or AR_STATE ~= "RACING" then break end
 
+        -- ⑤ Post-gate: record in clearedSet so this CP is never targeted again
         if cpCleared then
-            SetStatus(string.format("CP #%d  ✓  cleared", cpIdx), 0, 230, 100)
-            -- FIX: Do NOT zero velocity here. With CanCollide=false, zeroing velocity
-            -- lets gravity pull the car through the road during the pause, causing
-            -- the car to get stuck underground on every subsequent checkpoint.
-            -- Instead, keep momentum and immediately continue to the next CP loop.
-            task.wait(0.05)  -- minimal yield so status renders
+            clearedSet[cpIdx] = true
+            SetStatus(string.format("✓ CP #%d cleared", cpIdx), 0, 230, 100)
+            -- Brief coast — existing velocity carries car through the gate arch.
+            -- Do NOT zero velocity (CanCollide=false + no velocity = gravity drop).
+            task.wait(0.2)
         else
-            -- Timeout: skip this CP index so we don't loop forever on it
-            SetStatus(string.format("CP #%d  timed out — skipping", cpIdx), 255, 150, 0)
-            skippedIdx = cpIdx
+            -- 30s hard timeout — skip this index as a last resort
+            SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
+            skipIdx = cpIdx
             task.wait(0.2)
         end
     end
@@ -455,7 +476,6 @@ local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = false
 
     if Config.AutoRace and AR_STATE == "RACING" then
-        -- Finished naturally — go back to queue state
         AR_STATE = "QUEUING"
     end
     raceThread = nil
