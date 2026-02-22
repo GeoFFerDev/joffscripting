@@ -1,6 +1,23 @@
 --[[
-  JOSEPEDOV V20 — MIDNIGHT CHASERS
+  JOSEPEDOV V21 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Tabbed UI | Loading screen
+
+  NEW IN V21:
+  • Car under highway fixed  → Removed the downward raycast (V20). Most road Parts
+                               have CanCollide=false so the ray passed through them,
+                               found nothing, and fell back to gatePart.Y-5 = underground.
+                               Now targets gatePart.Y+3 directly (gate centres sit at road
+                               level Y≈-2 to -7, so +3 = just above tarmac).
+                               Added UPWARD ceiling raycast (20 studs) to detect bridge
+                               undersides (deck bottoms confirmed at Y≈17-18 in XML) and
+                               actively steer the car DOWN away from them.
+  • Infinite Nitro fixed     → Old code searched for NumberValue/IntValue children named
+                               "nitro/boost". From place XML: the game uses Attributes on
+                               the A-Chassis Values object — "CurrentBoost" / "MaxBoost".
+                               No child values are involved at all.
+                               New code: finds Values via PlayerGui → A-Chassis Interface
+                               → Values (or deep-searches car), reads MaxBoost attribute,
+                               writes CurrentBoost = MaxBoost every Heartbeat frame.
 
   NEW IN V20:
   • Bridge/underpass stuck fix → Per-frame downward raycast replaces fixed targetY.
@@ -481,29 +498,33 @@ local function DoRaceLoop(uuidFolder)
         end
 
         -- ③ Fly toward gate
-        --    XZ: full AutoRaceSpeed toward gate centre.
-        --    Y:  per-frame downward raycast finds the actual ground surface beneath
-        --        the car and targets groundY + HOVER. This means:
-        --          • Flat road   → car skims road surface
-        --          • Bridge top  → car rides on top of bridge (raycast hits bridge deck)
-        --          • Under bridge→ raycast hits road BELOW bridge, not bridge underside,
-        --                          so the car is never sucked up into the bridge bottom
-        --        Previously a fixed targetY = gate.Y + 4 was used. This caused the car
-        --        to still be at queue-spawn height (Y≈12) as it flew over/under bridge
-        --        sections (deck Y≈22–26), letting the P-controller drag it directly into
-        --        the bridge underside. The raycast approach is immune to this.
-        local HOVER     = 2   -- studs above ground surface to float
-        local flyLimit  = tick() + 30
-        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        --    XZ: full AutoRaceSpeed toward CP gate.
+        --    Y:  Target = gatePart.Y + 3  (CP gate centres sit at road level, Y≈-2 to -7,
+        --        so +3 puts the car just above the tarmac — exactly where it should be).
+        --
+        --    WHY NOT downward raycast (v20 attempt):
+        --        Most road surface Parts have CanCollide=false (cosmetic mesh). The ray
+        --        passes straight through them, finds nothing, and falls back to
+        --        gatePart.Y - 5 = underground. Car gets dragged below the highway.
+        --
+        --    Bridge/overpass guard — UPWARD raycast only:
+        --        Bridge deck bottoms are at Y≈17–18 (confirmed from place XML).
+        --        The car targeting Y≈0 is 17 studs below them — normally safe.
+        --        But if the car is still descending from queue height (Y=12) when it
+        --        crosses under a bridge, the ceiling can snag the roof.
+        --        Fix: each frame, cast UP 20 studs. If a ceiling is detected within
+        --        CEIL_CLEAR=10 studs, force targetY down to ceilY - CEIL_CLEAR so the
+        --        car steers away from the underside rather than into it.
+        local CEIL_CLEAR = 10  -- minimum clearance below any ceiling (studs)
+        local flyLimit   = tick() + 30
+        local arSpeed    = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
 
-        -- Raycast params — exclude the car and character so we hit world geometry only
-        local rcParams  = RaycastParams.new()
+        local rcParams = RaycastParams.new()
         rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
             if cpCleared then break end
-
             if not gatePart.Parent then cpCleared = true; break end
 
             local car  = currentCar
@@ -511,7 +532,6 @@ local function DoRaceLoop(uuidFolder)
             local root = car.PrimaryPart or currentSeat
             if not root then task.wait(0.05); continue end
 
-            -- Update raycast exclusion list each frame (character may respawn)
             local char = player.Character
             rcParams.FilterDescendantsInstances = char and {car, char} or {car}
 
@@ -520,25 +540,30 @@ local function DoRaceLoop(uuidFolder)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
-            -- PRIMARY proximity clear (XZ only — avoids false trigger from Y drift)
             if distXZ <= CLEAR_DIST then
                 cpCleared = true
                 break
             end
 
-            -- Ground detection: cast straight down up to 200 studs
-            local groundHit = Workspace:Raycast(myPos, Vector3.new(0, -200, 0), rcParams)
-            local groundY   = groundHit and groundHit.Position.Y or (gatePart.Position.Y - 5)
-            local targetY   = groundY + HOVER
+            -- Base target: road level (gate centre + 3)
+            local targetY = gatePart.Position.Y + 3
 
-            -- Y P-controller: gain 8, clamped ±80 for fast recovery, ±20 when close
-            -- (tight clamp near target prevents overshoot that could carry car into bridge)
+            -- Ceiling guard: if something solid is less than CEIL_CLEAR studs above,
+            -- push target down so the car ducks under the obstacle
+            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 20, 0), rcParams)
+            if ceilHit then
+                local clearance = ceilHit.Position.Y - myPos.Y
+                if clearance < CEIL_CLEAR then
+                    -- Steer the car down, away from the ceiling
+                    targetY = math.min(targetY, myPos.Y - (CEIL_CLEAR - clearance) * 3)
+                end
+            end
+
             local yErr  = targetY - myPos.Y
             local yGain = math.abs(yErr) > 8 and 8 or 5
             local yMax  = math.abs(yErr) > 8 and 80 or 20
             local velY  = math.clamp(yErr * yGain, -yMax, yMax)
 
-            -- XZ direction at full speed
             local dirXZ = (gateXZ - myXZ).Unit
             root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X * arSpeed, velY, dirXZ.Z * arSpeed)
             root.AssemblyAngularVelocity = Vector3.zero
@@ -1168,17 +1193,23 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- Inf Nitro
+    -- The game does NOT store nitro in NumberValue/IntValue children.
+    -- It uses Attributes on the A-Chassis Values object:
+    --   "CurrentBoost" = current nitro charge   (what we write to)
+    --   "MaxBoost"     = max capacity           (what we read for the refill amount)
+    -- We find the Values object via two paths (whichever resolves first):
+    --   1. player.PlayerGui → A-Chassis Interface → Values
+    --   2. currentCar:FindFirstChild("Values", true)  (deep search in the car)
     if Config.InfNitro then
-        for _,o in ipairs(currentCar:GetDescendants()) do
-            if o:IsA("NumberValue") or o:IsA("IntValue") then
-                local n=o.Name:lower()
-                if n:match("nitro") or n:match("boost") or n:match("n2o") then o.Value=9999 end
-            end
-        end
-        if iface and iface:FindFirstChild("Values") then
-            for _,o in ipairs(iface.Values:GetChildren()) do
-                local n=o.Name:lower()
-                if n:match("nitro") or n:match("boost") then o.Value=9999 end
+        local valObj = nil
+        local iface2 = player.PlayerGui:FindFirstChild("A-Chassis Interface")
+        if iface2 then valObj = iface2:FindFirstChild("Values") end
+        if not valObj then valObj = currentCar:FindFirstChild("Values", true) end
+        if valObj then
+            local maxB = valObj:GetAttribute("MaxBoost")
+            if maxB and maxB > 0 then
+                -- Refill CurrentBoost to MaxBoost every frame
+                valObj:SetAttribute("CurrentBoost", maxB)
             end
         end
     end
@@ -1293,5 +1324,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J20] Midnight Chasers — all systems ready")
-print("[J20] AutoRace: raycast-Y · char-collide fix · bridge proof | v20")
+print("[J21] Midnight Chasers — all systems ready")
+print("[J21] AutoRace: gate-Y + ceil-guard · InfNitro Attribute fix | v21")
