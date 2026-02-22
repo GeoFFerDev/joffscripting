@@ -1,6 +1,20 @@
 --[[
-  JOSEPEDOV V18 — MIDNIGHT CHASERS
+  JOSEPEDOV V19 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Tabbed UI | Loading screen
+
+  NEW IN V19:
+  • Wall/obstacle collisions   → Car no longer flies in 3D straight line toward CP.
+                                 Now drives XZ-only at full AutoRaceSpeed with a gentle
+                                 Y correction (±60 stud/s) to stay at road level.
+                                 Walls, barriers, and buildings are on the sides of
+                                 the road — a road-level horizontal approach avoids them.
+  • Real drag slider (Race tab)→ "FLIGHT SPEED" replaced with a draggable track slider,
+                                 range 50–600 studs/s. Color-codes the value:
+                                 blue=safe · orange=fast · red=at cap.
+  • Separate AutoRaceSpeed     → Config.AutoRaceSpeed (default 350) controls AR flight.
+                                 Config.MaxSpeed still controls SpeedHack. Hard cap 600.
+  • TP back to queue after race→ On race complete, car is teleported back to QUEUE_POS
+                                 so user can re-queue instantly without driving back.
 
   FIXES vs V17:
   ─────────────────────────────────────────────────────────────────
@@ -99,7 +113,7 @@ titleLbl.TextSize = 38
 
 local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size = UDim2.new(1,0,0,24); subLbl.Position = UDim2.new(0,0,0.36,0)
-subLbl.BackgroundTransparency = 1; subLbl.Text = "JOSEPEDOV V17"
+subLbl.BackgroundTransparency = 1; subLbl.Text = "JOSEPEDOV V19"
 subLbl.TextColor3 = Color3.fromRGB(60,100,160); subLbl.Font = Enum.Font.GothamBold
 subLbl.TextSize = 16
 
@@ -251,9 +265,12 @@ local Config = {
     FPS_Boosted    = false,
     FullBright     = false,
     Acceleration   = 3.0,
-    MaxSpeed       = 320,
+    MaxSpeed       = 320,  -- SpeedHack top speed
+    AutoRaceSpeed  = 350,  -- AutoRace flight speed (separate, capped at AR_SPEED_CAP)
     Deadzone       = 0.1,
 }
+
+local AR_SPEED_CAP = 600  -- hard ceiling for AutoRace; >600 causes wall clipping
 
 local OriginalTech    = Lighting.Technology
 local OriginalAmbient = Lighting.Ambient
@@ -394,8 +411,27 @@ local function DoRaceLoop(uuidFolder)
 
         if not gatePart then
             -- No more CPs in folder — race finished
-            SetStatus("🏁 Race complete!", 0, 255, 120)
+            SetStatus("🏁 Race complete! Returning to queue...", 0, 255, 120)
             task.wait(2)
+
+            -- TP car back to queue so user can re-enter the race instantly
+            RestoreCollisions()  -- re-enable collisions before landing
+            raceOwnsStatus = false
+            local char2 = player.Character
+            if char2 and char2:FindFirstChild("Humanoid") then
+                local seat2 = char2.Humanoid.SeatPart
+                if seat2 and seat2:IsA("VehicleSeat") then
+                    local car2  = seat2.Parent
+                    local root2 = car2.PrimaryPart or seat2
+                    if root2 then
+                        task.wait(0.1)
+                        car2:PivotTo(CFrame.new(QUEUE_POS))
+                        root2.AssemblyLinearVelocity  = Vector3.zero
+                        root2.AssemblyAngularVelocity = Vector3.zero
+                        SetStatus("⏎ Back at queue — drive in to race again!", 0, 190, 255)
+                    end
+                end
+            end
             break
         end
 
@@ -412,19 +448,18 @@ local function DoRaceLoop(uuidFolder)
         end
 
         -- ③ Fly toward gate
-        --    PRIMARY clear = proximity (dist <= CLEAR_DIST)
-        --    SECONDARY clear = ChildRemoved fires (rare but kept as backup)
-        --    STOP applying velocity when dist <= CLEAR_DIST to avoid oscillation.
-        --    Oscillation was the "mid-air freeze" bug: at close range, dir flips
-        --    every frame (car overshoots, reverses, overshoots again) because
-        --    0.001-stud trigger is skipped, so the loop never exits naturally.
+        --    VELOCITY: XZ-plane only at AutoRaceSpeed. Y is a gentle ±60 correction
+        --    toward (gate Y + 4) so the car stays at road level instead of flying in
+        --    a 3D diagonal that cuts through walls, buildings, and barriers.
+        --    PRIMARY clear = XZ proximity <= CLEAR_DIST
+        --    SECONDARY clear = ChildRemoved fires (server is fast)
         local flyLimit = tick() + 30
+        local arSpeed  = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
-            if cpCleared then break end  -- ChildRemoved fired (backup path)
+            if cpCleared then break end
 
-            -- Part removed without event (extreme network edge case)
             if not gatePart.Parent then cpCleared = true; break end
 
             local car  = currentCar
@@ -432,22 +467,26 @@ local function DoRaceLoop(uuidFolder)
             local root = car.PrimaryPart or currentSeat
             if not root then task.wait(0.05); continue end
 
-            local myPos     = root.Position
-            local targetPos = gatePart.Position
-            local dist      = (targetPos - myPos).Magnitude
+            local myPos  = root.Position
+            local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
+            local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
+            local distXZ = (gateXZ - myXZ).Magnitude
 
-            -- PRIMARY proximity clear — exit before oscillation zone
-            if dist <= CLEAR_DIST then
+            -- PRIMARY proximity clear (XZ only — avoids false trigger from Y drift)
+            if distXZ <= CLEAR_DIST then
                 cpCleared = true
                 break
             end
 
-            -- Apply velocity only when far enough that dir vector is stable
-            local dir = (targetPos - myPos).Unit
-            root.AssemblyLinearVelocity  = dir * Config.MaxSpeed
+            -- XZ direction at full speed, gentle Y correction to road level
+            local dirXZ = (gateXZ - myXZ).Unit
+            local targetY = gatePart.Position.Y + 4      -- hover just above gate centre
+            local velY  = math.clamp((targetY - myPos.Y) * 8, -60, 60)
+
+            root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X * arSpeed, velY, dirXZ.Z * arSpeed)
             root.AssemblyAngularVelocity = Vector3.zero
 
-            SetStatus(string.format("→ CP #%d   %.0f studs", cpIdx, dist), 0, 190, 255)
+            SetStatus(string.format("→ CP #%d   %.0f studs", cpIdx, distXZ), 0, 190, 255)
             task.wait()
         end
 
@@ -726,7 +765,7 @@ local function Toggle(page, label, order, callback)
     return setV
 end
 
--- Slider row
+-- Slider row (< > buttons) — used in Car tab
 local function Slider(page, fmt, order, getV, decV, incV)
     local r=RowFrame(page,36,order)
     local lbl=Instance.new("TextLabel",r)
@@ -744,6 +783,157 @@ local function Slider(page, fmt, order, getV, decV, incV)
     end
     mkB("<",0.60).MouseButton1Click:Connect(function() decV(); lbl.Text=string.format(fmt,getV()) end)
     mkB(">",0.78).MouseButton1Click:Connect(function() incV(); lbl.Text=string.format(fmt,getV()) end)
+end
+
+-- Drag Slider — used in Race tab for AutoRace flight speed
+-- minVal/maxVal: numeric range. getV/setV: getter and setter functions.
+-- Value label colour-codes: blue=normal · orange=fast (>450) · red=at cap (600).
+local function DragSlider(page, label, order, minVal, maxVal, getV, setV)
+    local r = RowFrame(page, 58, order)
+
+    -- Label (top-left)
+    local nameLbl = Instance.new("TextLabel", r)
+    nameLbl.Size     = UDim2.new(0.55, 0, 0, 18)
+    nameLbl.Position = UDim2.new(0, 10, 0, 7)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Text     = label
+    nameLbl.TextColor3 = C.Text
+    nameLbl.Font     = Enum.Font.GothamBold
+    nameLbl.TextSize = 11
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Value readout (top-right)
+    local valLbl = Instance.new("TextLabel", r)
+    valLbl.Size     = UDim2.new(0.40, -10, 0, 18)
+    valLbl.Position = UDim2.new(0.58, 0, 0, 7)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Font     = Enum.Font.GothamBold
+    valLbl.TextSize = 11
+    valLbl.TextXAlignment = Enum.TextXAlignment.Right
+
+    -- Warning badge (shows "FAST" / "MAX")
+    local warnLbl = Instance.new("TextLabel", r)
+    warnLbl.Size     = UDim2.new(0, 34, 0, 14)
+    warnLbl.Position = UDim2.new(1, -44, 0, 9)
+    warnLbl.BackgroundTransparency = 1
+    warnLbl.Font     = Enum.Font.GothamBold
+    warnLbl.TextSize = 9
+    warnLbl.TextXAlignment = Enum.TextXAlignment.Right
+
+    -- Track background
+    local track = Instance.new("Frame", r)
+    track.Size             = UDim2.new(1, -20, 0, 6)
+    track.Position         = UDim2.new(0, 10, 0, 36)
+    track.BackgroundColor3 = Color3.fromRGB(14, 18, 28)
+    track.BorderSizePixel  = 0
+    Instance.new("UICorner", track).CornerRadius = UDim.new(0, 3)
+
+    -- Filled portion
+    local fill = Instance.new("Frame", track)
+    fill.BackgroundColor3 = C.Accent
+    fill.BorderSizePixel  = 0
+    fill.Size             = UDim2.new(0, 0, 1, 0)
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
+
+    -- Draggable knob
+    local knob = Instance.new("Frame", track)
+    knob.Size             = UDim2.new(0, 14, 0, 14)
+    knob.BackgroundColor3 = Color3.new(1, 1, 1)
+    knob.BorderSizePixel  = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(0, 7)
+    Instance.new("UIStroke", knob).Color        = C.Dim
+
+    -- Min / max labels below track
+    local minTxt = Instance.new("TextLabel", r)
+    minTxt.Size = UDim2.new(0, 30, 0, 10); minTxt.Position = UDim2.new(0, 10, 0, 45)
+    minTxt.BackgroundTransparency = 1; minTxt.Text = tostring(minVal)
+    minTxt.TextColor3 = C.Dim; minTxt.Font = Enum.Font.Code; minTxt.TextSize = 8
+    minTxt.TextXAlignment = Enum.TextXAlignment.Left
+
+    local maxTxt = Instance.new("TextLabel", r)
+    maxTxt.Size = UDim2.new(0, 30, 0, 10); maxTxt.Position = UDim2.new(1, -40, 0, 45)
+    maxTxt.BackgroundTransparency = 1; maxTxt.Text = tostring(maxVal).." MAX"
+    maxTxt.TextColor3 = Color3.fromRGB(200, 55, 55); maxTxt.Font = Enum.Font.Code; maxTxt.TextSize = 8
+    maxTxt.TextXAlignment = Enum.TextXAlignment.Right
+
+    -- Sweet-spot tick mark at 500
+    local sweetPct = (500 - minVal) / (maxVal - minVal)
+    local tick500 = Instance.new("Frame", track)
+    tick500.Size             = UDim2.new(0, 2, 1, 4)
+    tick500.Position         = UDim2.new(sweetPct, -1, 0, -2)
+    tick500.BackgroundColor3 = Color3.fromRGB(255, 152, 0)
+    tick500.BorderSizePixel  = 0
+    local sweetLbl = Instance.new("TextLabel", r)
+    sweetLbl.Size = UDim2.new(0, 28, 0, 10)
+    sweetLbl.Position = UDim2.new(sweetPct, -14, 0, 45)
+    sweetLbl.BackgroundTransparency = 1; sweetLbl.Text = "↑500"
+    sweetLbl.TextColor3 = Color3.fromRGB(255, 152, 0)
+    sweetLbl.Font = Enum.Font.Code; sweetLbl.TextSize = 8
+
+    -- Update display from a 0–1 percentage
+    local function updateFromPct(pct)
+        pct = math.clamp(pct, 0, 1)
+        -- Snap to nearest 10
+        local raw = minVal + pct * (maxVal - minVal)
+        local val = math.clamp(math.round(raw / 10) * 10, minVal, maxVal)
+        setV(val)
+        local realPct = (val - minVal) / (maxVal - minVal)
+        fill.Size     = UDim2.new(realPct, 0, 1, 0)
+        knob.Position = UDim2.new(realPct, -7, 0.5, -7)
+
+        -- Colour-code value and fill
+        local col
+        if val >= maxVal then
+            col = Color3.fromRGB(215, 55, 55)
+            warnLbl.Text = "MAX"; warnLbl.TextColor3 = col
+        elseif val > 499 then
+            col = Color3.fromRGB(255, 152, 0)
+            warnLbl.Text = "FAST"; warnLbl.TextColor3 = col
+        else
+            col = C.Accent
+            warnLbl.Text = ""
+        end
+        valLbl.Text      = val .. " st/s"
+        valLbl.TextColor3 = col
+        fill.BackgroundColor3 = col
+        knob.BackgroundColor3 = val >= maxVal and Color3.fromRGB(215, 55, 55) or Color3.new(1,1,1)
+    end
+
+    -- Initialise display
+    updateFromPct((getV() - minVal) / (maxVal - minVal))
+
+    -- Input handling — drag or click anywhere on the track
+    local dragging = false
+    local function applyInput(inp)
+        local absX  = track.AbsolutePosition.X
+        local absW  = track.AbsoluteSize.X
+        updateFromPct((inp.Position.X - absX) / absW)
+    end
+
+    knob.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+        end
+    end)
+    track.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; applyInput(inp)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
+                      or inp.UserInputType == Enum.UserInputType.Touch) then
+            applyInput(inp)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
 end
 
 -- ── Race tab content ─────────────────────────────────────────
@@ -784,10 +974,9 @@ statLbl.TextSize=11; statLbl.TextWrapped=true; statLbl.TextXAlignment=Enum.TextX
 _statusLbl = statLbl
 
 SecLabel("race","FLIGHT SPEED",5)
-Slider("race","Speed: %d studs/s",6,
-    function() return Config.MaxSpeed end,
-    function() Config.MaxSpeed=math.max(50,Config.MaxSpeed-50) end,
-    function() Config.MaxSpeed=Config.MaxSpeed+50 end)
+DragSlider("race","AutoRace Speed",6, 50, AR_SPEED_CAP,
+    function() return Config.AutoRaceSpeed end,
+    function(v) Config.AutoRaceSpeed = math.clamp(v, 50, AR_SPEED_CAP) end)
 
 -- AR button visual state
 local function UpdateARVisual()
@@ -1047,5 +1236,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J17] Midnight Chasers — all systems ready")
-print("[J17] AutoRace: City Highway Race | v17 collision fix + CP skip logic")
+print("[J19] Midnight Chasers — all systems ready")
+print("[J19] AutoRace: XZ-flight · DragSlider · TP-back · 600 cap | v19")
