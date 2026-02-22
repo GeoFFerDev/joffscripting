@@ -1,6 +1,22 @@
 --[[
-  JOSEPEDOV V19 — MIDNIGHT CHASERS
+  JOSEPEDOV V20 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Tabbed UI | Loading screen
+
+  NEW IN V20:
+  • Bridge/underpass stuck fix → Per-frame downward raycast replaces fixed targetY.
+                                 The car now always tracks the actual surface directly
+                                 below it (road, bridge deck, etc.) and hovers HOVER=2
+                                 studs above it. Bridge undersides are never targeted
+                                 because the raycast finds the road BELOW the bridge,
+                                 not the bridge bottom above the car.
+  • Character collision fix   → DisableCollisions now also sets CanCollide=false on
+                                 the seated character's body parts (Torso, Arms, etc.).
+                                 These are not car:GetDescendants(), so they were still
+                                 physically snagging bridge geometry even when the car
+                                 itself passed through. Restored on race end.
+  • Tighter Y overshoot guard → P-controller gain drops from 8→5 and clamp drops from
+                                 ±80→±20 when within 8 studs of ground target, so the
+                                 car can't launch itself into bridge geometry on approach.
 
   NEW IN V19:
   • Wall/obstacle collisions   → Car no longer flies in 3D straight line toward CP.
@@ -297,6 +313,7 @@ local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
 -- ── Collision helpers (FIX #1) ──────────────────────────────
 -- Always operate on a specific car reference, not the global currentCar.
 -- This prevents mismatches when the car changes between disable/enable calls.
+-- Car-side collision disable
 local function DisableCollisions(car)
     if not car then return end
     disabledCar = car
@@ -305,15 +322,31 @@ local function DisableCollisions(car)
             p.CanCollide = false
         end
     end
+    -- Also disable collisions on the seated character's body parts.
+    -- DisableCollisions only touches car:GetDescendants(), so the player's
+    -- Torso, Arms, Legs etc. remain CanCollide=true and can snag bridge
+    -- underside geometry even when the car passes straight through it.
+    local char = player.Character
+    if char then
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
 end
 
 local function RestoreCollisions()
-    -- Restore whichever car we disabled, regardless of currentCar
     local car = disabledCar or currentCar
     if not car then return end
     for _, p in ipairs(car:GetDescendants()) do
         if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
             p.CanCollide = true
+        end
+    end
+    -- Restore character body parts
+    local char = player.Character
+    if char then
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = true end
         end
     end
     disabledCar = nil
@@ -448,13 +481,24 @@ local function DoRaceLoop(uuidFolder)
         end
 
         -- ③ Fly toward gate
-        --    VELOCITY: XZ-plane only at AutoRaceSpeed. Y is a gentle ±60 correction
-        --    toward (gate Y + 4) so the car stays at road level instead of flying in
-        --    a 3D diagonal that cuts through walls, buildings, and barriers.
-        --    PRIMARY clear = XZ proximity <= CLEAR_DIST
-        --    SECONDARY clear = ChildRemoved fires (server is fast)
-        local flyLimit = tick() + 30
-        local arSpeed  = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        --    XZ: full AutoRaceSpeed toward gate centre.
+        --    Y:  per-frame downward raycast finds the actual ground surface beneath
+        --        the car and targets groundY + HOVER. This means:
+        --          • Flat road   → car skims road surface
+        --          • Bridge top  → car rides on top of bridge (raycast hits bridge deck)
+        --          • Under bridge→ raycast hits road BELOW bridge, not bridge underside,
+        --                          so the car is never sucked up into the bridge bottom
+        --        Previously a fixed targetY = gate.Y + 4 was used. This caused the car
+        --        to still be at queue-spawn height (Y≈12) as it flew over/under bridge
+        --        sections (deck Y≈22–26), letting the P-controller drag it directly into
+        --        the bridge underside. The raycast approach is immune to this.
+        local HOVER     = 2   -- studs above ground surface to float
+        local flyLimit  = tick() + 30
+        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+
+        -- Raycast params — exclude the car and character so we hit world geometry only
+        local rcParams  = RaycastParams.new()
+        rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
@@ -467,6 +511,10 @@ local function DoRaceLoop(uuidFolder)
             local root = car.PrimaryPart or currentSeat
             if not root then task.wait(0.05); continue end
 
+            -- Update raycast exclusion list each frame (character may respawn)
+            local char = player.Character
+            rcParams.FilterDescendantsInstances = char and {car, char} or {car}
+
             local myPos  = root.Position
             local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
@@ -478,11 +526,20 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- XZ direction at full speed, gentle Y correction to road level
-            local dirXZ = (gateXZ - myXZ).Unit
-            local targetY = gatePart.Position.Y + 4      -- hover just above gate centre
-            local velY  = math.clamp((targetY - myPos.Y) * 8, -60, 60)
+            -- Ground detection: cast straight down up to 200 studs
+            local groundHit = Workspace:Raycast(myPos, Vector3.new(0, -200, 0), rcParams)
+            local groundY   = groundHit and groundHit.Position.Y or (gatePart.Position.Y - 5)
+            local targetY   = groundY + HOVER
 
+            -- Y P-controller: gain 8, clamped ±80 for fast recovery, ±20 when close
+            -- (tight clamp near target prevents overshoot that could carry car into bridge)
+            local yErr  = targetY - myPos.Y
+            local yGain = math.abs(yErr) > 8 and 8 or 5
+            local yMax  = math.abs(yErr) > 8 and 80 or 20
+            local velY  = math.clamp(yErr * yGain, -yMax, yMax)
+
+            -- XZ direction at full speed
+            local dirXZ = (gateXZ - myXZ).Unit
             root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X * arSpeed, velY, dirXZ.Z * arSpeed)
             root.AssemblyAngularVelocity = Vector3.zero
 
@@ -1236,5 +1293,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J19] Midnight Chasers — all systems ready")
-print("[J19] AutoRace: XZ-flight · DragSlider · TP-back · 600 cap | v19")
+print("[J20] Midnight Chasers — all systems ready")
+print("[J20] AutoRace: raycast-Y · char-collide fix · bridge proof | v20")
