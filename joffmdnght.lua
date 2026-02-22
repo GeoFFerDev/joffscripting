@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V17 — MIDNIGHT CHASERS
+  JOSEPEDOV V17 — MIDNIGHT CHASERS  [PATCHED by analysis]
   Highway AutoRace exploit | Tabbed UI | Loading screen
   
   BUG FIXES vs v16:
@@ -8,6 +8,23 @@
   • Status flicker         → single writer per mode; update every frame while flying
   • ChildRemoved crash     → safe nil-check before connecting
   • Heartbeat/coroutine    → no shared status writes; raceOwnsStatus flag
+
+  ADDITIONAL FIXES (this build):
+  • Car stuck after CP 1   → REMOVED AssemblyLinearVelocity=zero after clearing a CP.
+                             Place has CanCollide=false on all car parts during race;
+                             zeroing velocity let gravity pull the car THROUGH the road
+                             during the 0.15s pause, causing the car to get trapped
+                             underground on every subsequent checkpoint.
+  • CPs missing on slow    → StreamingEnabled=true with 400-stud min radius. CP Parts
+    connection              are dynamically spawned server-side at race start, so the
+                             loading-screen flythrough can't pre-stream them. Fixed by
+                             parking the camera above CP27 for 2.5s at DoRaceLoop start
+                             before any FindNextCP call. CP wait timeout also extended
+                             from 5s → 15s.
+  • QUEUE_POS Y wrong      → XML: QueueRegion centre Y=-7.515, size Y=38 → top Y≈11.5.
+                             Old Y=4 placed car below road surface. Fixed to Y=12.
+  • Loading screen note    → Added comment explaining why flythrough can't preload
+                             dynamic CPs and where the real streaming fix lives.
 ]]
 
 local Players           = game:GetService("Players")
@@ -145,8 +162,13 @@ local loadAnimConn = RunService.Heartbeat:Connect(function(dt)
 end)
 
 -- Camera flythrough — Real 3D positions over the highway
--- Route data from XML: Queue→CP27→CP28→CP29
--- Camera is elevated above road (road Y ≈ -5 to 0, camera Y = 40-80)
+-- Route data from XML: Queue(3260,1015) → CP27(2513,411) → CP28(2981,537) → CP29(3485,622)
+-- NOTE: StreamingEnabled=true in this place (min radius 400 studs).
+-- Checkpoint Parts are dynamically created by the SERVER only when a race session
+-- begins — they don't exist at script load time, so this flythrough CANNOT stream
+-- them. The actual streaming fix lives at the top of DoRaceLoop (see below).
+-- The flythrough still correctly shows the highway route as a visual preview.
+-- Camera is elevated above road (road Y ≈ 0, camera Y = 40-80)
 local cam = Workspace.CurrentCamera
 local prevCamType = cam.CameraType
 cam.CameraType = Enum.CameraType.Scriptable
@@ -230,8 +252,10 @@ local AR_STATE      = "IDLE"
 local raceThread    = nil
 local raceOwnsStatus = false  -- when true, Heartbeat never writes status (FIX #3)
 
--- Race1 QueueRegion centre from XML (Y lifted above road surface)
-local QUEUE_POS = Vector3.new(3260.5, 4, 1015.7)
+-- Race1 QueueRegion centre from XML.
+-- Part centre Y=-7.515, size Y=38 → top surface ≈ Y=11.5.
+-- Y=4 (old) was below road surface causing the car to clip into the gate.
+local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
 
 -- ── Collision helpers (FIX #1) ──────────────────────────────
 -- Always operate on a specific car reference, not the global currentCar.
@@ -315,13 +339,38 @@ local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
     DisableCollisions(currentCar)
 
+    -- ── STREAMING PRE-LOAD FIX ──────────────────────────────────────────────
+    -- StreamingEnabled=true in this place (min radius 400 studs).
+    -- Checkpoint Parts are DYNAMICALLY created by the server when the race starts
+    -- and won't exist at loading-screen time, so the loading-screen camera flythrough
+    -- cannot pre-stream them. We fix this by briefly parking the camera above the
+    -- first CP's known world position so Roblox streams those Parts to the client
+    -- before we try to FindNextCP. Without this, slow clients see no CPs at all.
+    do
+        local streamCam = Workspace.CurrentCamera
+        local prevType  = streamCam.CameraType
+        streamCam.CameraType = Enum.CameraType.Scriptable
+        -- Hover above CP 27 (X=2513, Z=411) at a safe height
+        local streamTarget = CFrame.lookAt(
+            Vector3.new(2513, 80, 411),
+            Vector3.new(2513, -3, 411)
+        )
+        TweenService:Create(streamCam, TweenInfo.new(0.6, Enum.EasingStyle.Sine),
+            {CFrame = streamTarget}):Play()
+        SetStatus("⏳ Streaming checkpoints...", 255, 200, 60)
+        task.wait(2.5)   -- give the streaming system time to replicate CP Parts
+        streamCam.CameraType = prevType
+    end
+    -- ── END STREAMING PRE-LOAD ──────────────────────────────────────────────
+
     local skippedIdx = nil  -- index of last timed-out CP (FIX #2)
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
         -- ① Wait until a checkpoint Part appears (FIX #2: server may be slow)
         local gatePart, cpIdx
-        local waitForCP = tick() + 5  -- wait up to 5 s for next CP
+        local waitForCP = tick() + 15  -- FIX: extended to 15 s — on slow connections
+        -- the server-created checkpoint Parts may not have streamed to the client yet
         repeat
             gatePart, cpIdx = FindNextCP(uuidFolder, skippedIdx)
             if not gatePart then task.wait(0.1) end
@@ -388,13 +437,11 @@ local function DoRaceLoop(uuidFolder)
 
         if cpCleared then
             SetStatus(string.format("CP #%d  ✓  cleared", cpIdx), 0, 230, 100)
-            -- Kill momentum so car settles for a moment
-            local root = currentCar and (currentCar.PrimaryPart or currentSeat)
-            if root then
-                root.AssemblyLinearVelocity  = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-            task.wait(0.15)
+            -- FIX: Do NOT zero velocity here. With CanCollide=false, zeroing velocity
+            -- lets gravity pull the car through the road during the pause, causing
+            -- the car to get stuck underground on every subsequent checkpoint.
+            -- Instead, keep momentum and immediately continue to the next CP loop.
+            task.wait(0.05)  -- minimal yield so status renders
         else
             -- Timeout: skip this CP index so we don't loop forever on it
             SetStatus(string.format("CP #%d  timed out — skipping", cpIdx), 255, 150, 0)
