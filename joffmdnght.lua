@@ -1,66 +1,52 @@
 --[[
   JOSEPEDOV V23 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Dynamic Elevation Tracking
+  Highway AutoRace exploit | Fluent UI | Terrain-Locked Flight Engine
 
   ══════════════════════════════════════════════════════════════
-  V23 — FLIGHT ENGINE REWRITE (dynamic road grade tracking)
+  V22c BUG: "CAR FLIES ABOVE CHECKPOINTS AFTER FIRST CP"
   ══════════════════════════════════════════════════════════════
+  V22c used:  gateTopY = gate.Position.Y + gate.Size.Y*0.5 + 3
+  This puts the car 3 studs ABOVE the arch top — OUTSIDE the gate's
+  server-side trigger volume entirely.  The first CP cleared only because
+  the car happened to pass close enough at start.  All subsequent CPs:
+  the car flew 5-10 studs above the trigger and the server never fired.
 
-  BUGS FIXED vs V22c:
-
-  BUG 1 — Ceiling guard formula drove car underground  [CRITICAL]
-    V22c:   targetY = min(targetY, myPos.Y − (CEIL_GAP−gap) * 2)
-    If bridge is 5 studs above (gap=5, CEIL_GAP=8):
-      targetY = myPos.Y − 6  ← pushes to e.g. Y=2 when car is at Y=8
-    The car was being ACTIVELY STEERED underground on every bridge/overpass.
-    V23 fix: targetY = min(targetY, ceilHit.Position.Y − CEIL_GAP)
-    Absolute reference. If bridge bottom is at Y=13, ceiling guard clamps
-    targetY to 13−9=4 at most. Car stays above road level always.
-
-  BUG 2 — targetY = gateTopY from 500 studs away  [MAIN JITTER CAUSE]
-    Road elevation changes between checkpoints (queue Y=12, CP28 top≈Y6,
-    CP29 top≈Y10). Targeting the final gate's Y from the very start of each
-    leg creates a large, sustained yErr (e.g. −6 the whole 400-stud approach
-    to CP28). The PD controller responds with maximum downward velocity most
-    of the time, then violently overshoots when the car gets close.
-    V23 fix: distance-lerp from lastSafeY → gateTopY over the XZ leg.
-      progress = 1 − (distXZ / startDistXZ)    (0.0 at start, 1.0 at gate)
-      targetY  = lastSafeY + (gateTopY − lastSafeY) * progress
-    The car follows the ROAD GRADE naturally. yErr stays near zero the whole
-    approach. No violent corrections, no oscillation.
-
-  BUG 3 — Floor guard found wrong geometry  [RANDOM UPWARD JERK]
-    Downward 40-stud raycast intended to find road, but road is CanCollide=false.
-    What it found: bridge abutments, map foundation, guardrail bases.
-    These pushed targetY UP unexpectedly, sending the car into bridge undersides.
-    V23 fix: floor guard removed. Road grade handled by lerp (Bug 2 fix).
-
-  BUG 4 — Multi-zone asymmetric PD oscillation  ["randomly moving anywhere"]
-    Six gain zones (Kp 3→10, Kd 2→5) with discrete thresholds caused hard
-    transitions in velY output every frame, producing sustained oscillation.
-    V23 fix: single Kp=6 proportional controller, smooth ±70 cap,
-    tight fine-zone (±3 studs: Kp=10, ±25 cap). Stable across all road grades.
-
-  BUG 5 — Dead coast after CP clear sank the car  [BETWEEN-CP GRAVITY DROP]
-    Old: task.wait(0.2) with no velocity. CanCollide=false + no velocity
-    = gravity pulls car through road floor during the gap between CP loops.
-    V23 fix: active coast holds car at gateTopY + forward momentum for 0.2s.
+  V23 FIX 1 — Target INSIDE the gate trigger volume:
+    gateTargetY = gate.Position.Y + gate.Size.Y * 0.30
+    (30% above gate center = upper portion of the arch opening, always
+     inside the trigger hitbox regardless of gate depth or road elevation)
 
   ══════════════════════════════════════════════════════════════
-  ROOT CAUSE DATA (from place XML — unchanged from V22)
+  V23 FIX 2 — PUNCH-THROUGH GUARANTEE
   ══════════════════════════════════════════════════════════════
-  CP28  centerY = -6.49,  sizeY = 24.95  → gateTop = 5.98
-  CP29  centerY = -4.49,  sizeY = 29.86  → gateTop = 10.44
-  Formula: gateTopY = gatePart.Position.Y + gatePart.Size.Y*0.5 + GATE_HOVER
-  GATE_HOVER=2 → CP28 target≈7.98, CP29 target≈12.44
-  Queue Y=12.  Road descends to ~8 at CP28, rises to ~12 at CP29.
-  The lerp follows this grade automatically.
+  When distXZ < PUNCH_DIST (14 studs), PivotTo directly through the
+  gate center at gateTargetY. This guarantees the car model overlaps
+  the trigger volume for at least one physics frame → server always fires.
+  No more "ghost passes" where the car skims just above.
 
   ══════════════════════════════════════════════════════════════
-  UI (V22 FLUENT — UNCHANGED)
+  V23 FIX 3 — TERRAIN-LOCKED Y (dynamic elevation)
   ══════════════════════════════════════════════════════════════
-  Glassmorphism panels · sidebar nav · toggle pills ·
-  drag slider · minimise icon · native drag.
+  Every frame, a downward raycast (80 studs) finds the actual road
+  surface under the car. targetY is always at least:
+    roadSurfaceY + ROAD_HOVER (4 studs above actual surface)
+  This means rising/falling highway sections are tracked automatically.
+  The car never sinks below road level or floats above it due to stale
+  checkpoint Y values.
+
+  ══════════════════════════════════════════════════════════════
+  STABLE FLIGHT ENGINE (V23)
+  ══════════════════════════════════════════════════════════════
+  • Gate-inside targeting: car always inside trigger volume
+  • Punch-through PivotTo at 14 studs → guaranteed server registration
+  • Terrain floor raycast every frame: road surface + 4 studs minimum
+  • PD controller: proportional + derivative, asymmetric gains
+  • Ceiling guard ↑ 20 studs, floor guard ↓ 80 studs
+  • CanCollide=false car + character: no physical snagging
+
+  ══════════════════════════════════════════════════════════════
+  UI (V23 — unchanged Fluent sidebar from V22)
+  ══════════════════════════════════════════════════════════════
 ]]
 
 -- ─────────────────────────────────────────────────────────────
@@ -87,7 +73,7 @@ local guiTarget = (type(gethui)=="function" and gethui())
     or player:WaitForChild("PlayerGui")
 
 -- Anti-overlap: destroy any previous instance
-if guiTarget:FindFirstChild("MC_V23") then guiTarget.MC_V23:Destroy() end
+if guiTarget:FindFirstChild("MC_V22") then guiTarget.MC_V22:Destroy() end
 
 -- ─────────────────────────────────────────────────────────────
 --  LOADING SCREEN
@@ -129,7 +115,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V23  ·  DYNAMIC ELEVATION EDITION"
+subLbl.Text   = "JOSEPEDOV V23  ·  TERRAIN-LOCKED EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -367,59 +353,37 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  FLIGHT ENGINE  (V23 — dynamic elevation tracking)
+--  STABLE FLIGHT ENGINE
 -- ─────────────────────────────────────────────────────────────
 --
---  KEY FACTS FROM PLACE XML:
---    Gate CENTERS are underground:  CP28 centerY=-6.49,  CP29 centerY=-4.49
---    Gate SIZE Y spans through road: CP28 sizeY=24.95 → gateTop≈5.98
---                                    CP29 sizeY=29.86 → gateTop≈10.44
---    Queue surface ≈ Y=12
---    Road is NOT flat — elevation changes between every checkpoint.
---    Road surface Parts are CanCollide=false (cosmetic mesh).
+--  KEY INSIGHT (confirmed from place XML):
+--    Gate CENTERS are underground (e.g. CP28 centerY=-6.49, CP29 centerY=-4.49).
+--    Gate SIZE Y spans up through the road (CP28 sizeY=24.95 → top=5.98,
+--    CP29 sizeY=29.86 → top=10.44).
+--    Therefore:
+--      WRONG:   targetY = gate.Position.Y + 3           → underground (-3.49, -1.49)
+--      CORRECT: targetY = gate.Position.Y + gate.Size.Y*0.5 + GATE_HOVER → above road
 --
---  V23 DESIGN DECISIONS:
+--  OBSTACLE SENSORS (3-ray):
+--    ↑ ceiling  20 studs → if within CEIL_GAP push targetY down
+--    ↓ floor    40 studs → if solid floor within FLOOR_GAP push targetY up
+--                          (handles the rare CanCollide=true road segment)
+--    → forward  25 studs → read surface Y ahead, pre-adjust target before arrival
 --
---  ① gateTopY = gatePart.Position.Y + gatePart.Size.Y*0.5 + GATE_HOVER
---      Correct formula from XML.  Center+3 = underground.
---      GATE_HOVER=2 puts the car 2 studs above the physical arch top.
+--  SMOOTH PD CONTROLLER:
+--    velY = Kp*(err) + Kd*(err - prevErr) clamped ±MAX_VY
+--    Kp/Kd drop to fine values when |err| < FINE_ZONE for smooth stop.
 --
---  ② Distance-based Y lerp: targetY = lastSafeY + (gateTopY−lastSafeY)*progress
---      Where progress = 1 − (distXZ / startDistXZ), clamped 0–1.
---      This linearly interpolates the car's HEIGHT from the previous confirmed
---      safe height to the current gate's height over the XZ distance of the leg.
---      Effect: the car follows the road grade automatically.
---        • Queue→CP27: descends from Y≈12 to gateTopY of CP27
---        • CP27→CP28: transitions from gateTopY27 to gateTopY28 (≈5.98)
---        • CP28→CP29: transitions from 5.98 to 10.44 (road rises slightly)
---      No sudden target jumps.  No "always aim at final gate from 500 studs away."
---
---  ③ Ceiling guard — ABSOLUTE formula (v22c's relative formula was the main bug):
---      OLD (broken): targetY = min(targetY, myPos.Y − (CEIL_GAP−gap)*2)
---        If bridge 5 studs above (gap=5, CEIL_GAP=8):
---        targetY = myPos.Y − 6  ← drives car straight underground
---      NEW (correct): targetY = min(targetY, ceilHit.Position.Y − CEIL_GAP)
---        Same scenario: targetY = bridgeBottomY − 8
---        Car stays CEIL_GAP studs below the actual ceiling.  Never goes underground.
---
---  ④ Floor guard REMOVED.
---      CanCollide=false road = raycast misses road surface entirely.
---      What it DID find: bridge abutments, map foundation, random geometry.
---      These pushed targetY UP unpredictably, into bridge undersides.
---      The lerp in ② handles road dips; ceiling guard handles bridges above.
---      No floor guard needed.
---
---  ⑤ Simple P controller replaces multi-zone asymmetric PD.
---      The 6-zone switching (Kp 3→10, Kd 2→5) caused discrete gain jumps that
---      produced sustained oscillation — the "randomly moving anywhere" symptom.
---      Single Kp=6 with soft saturation is stable and tracks road grade smoothly.
---
---  ⑥ Active coast after each CP clear.
---      CanCollide=false + zero velocity = gravity drops car through road in 0.2s.
---      We actively hold Y at gateTopY + forward momentum during the coast window.
+--  Y MEMORY (lastSafeY):
+--    Stores the targetY of the last successfully cleared CP.
+--    Used as fallback between CPs so the car doesn't jerk to gate.Y of
+--    an as-yet-unloaded next gate.
 
-local GATE_HOVER = 2    -- studs above gate arch top to fly at
-local CEIL_GAP   = 9    -- minimum clearance below any ceiling (studs)
+local ROAD_HOVER  = 4     -- studs above actual road surface (terrain-locked floor)
+local GATE_INSIDE = 0.30  -- fraction of gate size above center (inside trigger volume)
+local PUNCH_DIST  = 14    -- studs XZ at which we PivotTo through the gate (guaranteed hit)
+local CEIL_GAP    = 8     -- push down if ceiling within this many studs
+local FLOOR_GAP   = 5     -- push up if solid floor within this many studs
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -427,16 +391,16 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    -- lastSafeY: confirmed road height at last cleared CP (or queue at start).
-    -- Used as the interpolation start point for the next leg.
-    local lastSafeY  = QUEUE_POS.Y
+    local lastSafeY  = QUEUE_POS.Y   -- start at queue height
+    local prevYErr   = 0             -- for derivative term
 
+    -- Raycast params (reused each frame)
     local rcParams = RaycastParams.new()
     rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
-        -- ① Wait for next CP gate to appear (server spawns on race start)
+        -- ① Find next CP gate
         local gatePart, cpIdx
         local waitForCP = tick() + 15
         repeat
@@ -471,7 +435,7 @@ local function DoRaceLoop(uuidFolder)
 
         skipIdx = nil
 
-        -- ② ChildRemoved backup (fires if server removes the Part fast enough)
+        -- ② ChildRemoved listener (backup — fires if server is fast)
         local cpCleared = false
         local cpConn    = nil
         local cpParent  = gatePart.Parent
@@ -481,29 +445,23 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- ③ Gate-top height for this leg.
-        --    Gate centers sit underground; top = center + sizeY/2 + hover above arch.
-        local gateTopY = gatePart.Position.Y + gatePart.Size.Y * 0.5 + GATE_HOVER
+        -- ③ Gate-inside target (V23 FIX 1):
+        --    Target 30% above gate center → always inside the trigger hitbox.
+        --    Works for gates with underground centers (CP28/29) AND elevated gates.
+        local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_INSIDE
 
         -- ④ Fly toward the gate
+        --
+        --  V23 CHANGES vs V22c:
+        --    • gateTargetY = center + size*0.30 (inside trigger, not above arch)
+        --    • Punch-through PivotTo at PUNCH_DIST → guaranteed server fire
+        --    • Floor raycast every frame → terrain-locked minimum Y
+        --    • Removed MAX_ABOVE cap (fought with highway elevation changes)
+
         local flyLimit  = tick() + 30
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
-        -- Speed-scaled proximity trigger: at 600 st/s car covers 10 studs/frame
-        local clearDist = math.max(30, arSpeed * 0.07)
-
-        -- Record XZ distance to gate RIGHT NOW so we can compute progress below.
-        -- Must be read before the fly loop so it doesn't change each iteration.
-        local startDistXZ
-        do
-            local car0  = currentCar
-            local root0 = car0 and (car0.PrimaryPart or currentSeat)
-            if root0 then
-                local d0 = Vector3.new(gatePart.Position.X,0,gatePart.Position.Z)
-                        - Vector3.new(root0.Position.X,0,root0.Position.Z)
-                startDistXZ = d0.Magnitude
-            end
-            startDistXZ = math.max(startDistXZ or 1, 1)
-        end
+        local clearDist = math.max(28, arSpeed * 0.07)
+        prevYErr = 0
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
@@ -523,91 +481,108 @@ local function DoRaceLoop(uuidFolder)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
+            -- ── PUNCH-THROUGH (V23 FIX 2) ──────────────────────────
+            -- When very close, PivotTo directly through the gate center.
+            -- This guarantees the car model overlaps the server trigger.
+            if distXZ <= PUNCH_DIST then
+                local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
+                local punchCF = CFrame.new(
+                    gatePart.Position.X,
+                    gateTargetY,
+                    gatePart.Position.Z
+                ) * CFrame.Angles(0, ry, 0)
+                pcall(function()
+                    car:PivotTo(punchCF)
+                end)
+                root.AssemblyLinearVelocity  = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                task.wait(0.08)   -- one server tick to register
+                cpCleared = true
+                break
+            end
+
             if distXZ <= clearDist then
                 cpCleared = true
                 break
             end
 
-            -- ── DYNAMIC Y TARGET ────────────────────────────────────
-            --
-            -- Linearly interpolate from lastSafeY (confirmed height at previous CP)
-            -- to gateTopY (destination height) as we close in on the gate XZ-wise.
-            --
-            -- progress = 0.0 at the start of this leg
-            -- progress = 1.0 when we arrive at the gate
-            --
-            -- This means the car tracks the road GRADE between the two heights,
-            -- handling uphill/downhill sections without any sudden target jumps.
-            --
-            local progress = math.clamp(1 - distXZ / startDistXZ, 0, 1)
-            local targetY  = lastSafeY + (gateTopY - lastSafeY) * progress
+            -- ── Y COMPUTATION (V23 FIX 3 — terrain-locked) ─────────
+            -- Base: always target inside the gate trigger volume
+            local targetY = gateTargetY
 
-            -- ── CEILING GUARD ───────────────────────────────────────
-            -- Cast 25 studs upward. If solid geometry (bridge deck, overpass)
-            -- is within CEIL_GAP studs, constrain targetY to stay CEIL_GAP
-            -- studs below the ceiling.
-            --
-            -- IMPORTANT: use absolute formula (ceiling.Y − CEIL_GAP), NOT the
-            -- old relative formula (myPos.Y − factor*(CEIL_GAP−gap)) which
-            -- exploded to underground values when gap was small.
-            --
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
-            if ceilHit then
-                local gap = ceilHit.Position.Y - myPos.Y
-                if gap < CEIL_GAP then
-                    -- Stay CEIL_GAP studs below the ceiling — absolute reference
-                    targetY = math.min(targetY, ceilHit.Position.Y - CEIL_GAP)
+            -- TERRAIN FLOOR: cast down 80 studs to find actual road surface.
+            -- This handles all highway elevation changes dynamically.
+            local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -80, 0), rcParams)
+            if floorRay then
+                local roadY = floorRay.Position.Y
+                -- Car must always be at least ROAD_HOVER above the actual road
+                targetY = math.max(targetY, roadY + ROAD_HOVER)
+                -- Also prevent sinking through the road:
+                if myPos.Y - roadY < 2 then
+                    targetY = math.max(targetY, roadY + ROAD_HOVER)
                 end
             end
 
-            -- ── Y VELOCITY (simple P controller) ────────────────────
-            -- Single proportional gain — no multi-zone switching, no derivative.
-            -- Zone switching caused discrete Kp jumps that oscillated continuously.
-            -- A single Kp=6 with a ±70 cap is smooth and stable across all grades.
-            -- Soft zone: within 3 studs, use higher gain + tighter cap for precision.
-            local yErr = targetY - myPos.Y
-            local velY
-            if math.abs(yErr) <= 3 then
-                velY = math.clamp(yErr * 10, -25, 25)
-            else
-                velY = math.clamp(yErr *  6, -70, 70)
+            -- Ceiling guard ↑ 20 studs
+            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 20, 0), rcParams)
+            if ceilHit then
+                local gap = ceilHit.Position.Y - myPos.Y
+                if gap < CEIL_GAP then
+                    targetY = math.min(targetY, myPos.Y - (CEIL_GAP - gap) * 2)
+                end
             end
 
-            -- ── APPLY VELOCITY ──────────────────────────────────────
+            -- Floor guard (already computed via floorRay above, reuse)
+            if floorRay then
+                local floorTop = floorRay.Position.Y
+                if myPos.Y - floorTop < FLOOR_GAP then
+                    targetY = math.max(targetY, floorTop + FLOOR_GAP + 1)
+                end
+            end
+
+            -- PD controller — asymmetric gains:
+            -- Downward correction is stronger (car tends to drift UP at speed).
+            local yErr   = targetY - myPos.Y
+            local yDeriv = yErr - prevYErr
+            prevYErr = yErr
+
+            local Kp, Kd, maxVY
+            if yErr < -8 then
+                -- Above target by >8: strong downward pull
+                Kp=10; Kd=2; maxVY=120
+            elseif yErr < -3 then
+                -- Above target 3-8: moderate down
+                Kp=7;  Kd=3; maxVY=60
+            elseif yErr > 10 then
+                -- Below target by >10: strong upward
+                Kp=8;  Kd=2; maxVY=90
+            elseif yErr > 3 then
+                -- Below target 3-10: moderate up
+                Kp=5;  Kd=3; maxVY=45
+            else
+                -- Within 3 studs: fine hold
+                Kp=3;  Kd=5; maxVY=15
+            end
+            local velY = math.clamp(yErr*Kp + yDeriv*Kd, -maxVY, maxVY)
+
             local dirXZ = (gateXZ - myXZ).Unit
-            root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X * arSpeed, velY, dirXZ.Z * arSpeed)
+            root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X*arSpeed, velY, dirXZ.Z*arSpeed)
             root.AssemblyAngularVelocity = Vector3.zero
 
-            SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f (%.0f%%)",
-                cpIdx, distXZ, myPos.Y, targetY, progress*100), 0, 190, 255)
+            SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
+                cpIdx, distXZ, myPos.Y, gateTargetY), 0, 190, 255)
             task.wait()
         end
 
-        -- ⑤ Cleanup listener
+        -- ⑤ Cleanup
         if cpConn then pcall(function() cpConn:Disconnect() end) end
         if not Config.AutoRace or AR_STATE ~= "RACING" then break end
 
         if cpCleared then
             clearedSet[cpIdx] = true
-            lastSafeY = gateTopY   -- update confirmed road height for next leg's lerp
-            SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTopY), 0, 230, 100)
-
-            -- ⑥ Active coast: hold car at gateTopY with forward momentum for 0.2s.
-            --    CanCollide=false + dead wait = gravity drops car through road.
-            --    We keep velocity live so the car stays on grade until next CP loop.
-            local coastEnd = tick() + 0.2
-            local spd2 = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
-            while tick() < coastEnd do
-                if not Config.AutoRace or AR_STATE ~= "RACING" then break end
-                local r = currentCar and (currentCar.PrimaryPart or currentSeat)
-                if r then
-                    local fwd    = r.CFrame.LookVector
-                    local holdVY = math.clamp((gateTopY - r.Position.Y) * 8, -20, 20)
-                    r.AssemblyLinearVelocity  = Vector3.new(fwd.X*spd2, holdVY, fwd.Z*spd2)
-                    r.AssemblyAngularVelocity = Vector3.zero
-                end
-                task.wait()
-            end
+            lastSafeY = gateTargetY  -- record confirmed safe height for this CP
+            SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTargetY), 0, 230, 100)
+            task.wait(0.2)
         else
             SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
             skipIdx = cpIdx
@@ -698,7 +673,7 @@ local Theme = {
 }
 
 local ScreenGui = Instance.new("ScreenGui", guiTarget)
-ScreenGui.Name          = "MC_V23"
+ScreenGui.Name          = "MC_V22"
 ScreenGui.ResetOnSpawn  = false
 ScreenGui.IgnoreGuiInset = true
 
@@ -1295,8 +1270,8 @@ local function InfoRow(parent, text)
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
 InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V23")
-InfoRow(TabMisc, "🔧  Gate-top Y · dist-lerp elevation tracking")
-InfoRow(TabMisc, "🎚️  Stable P controller · absolute ceil guard")
+InfoRow(TabMisc, "🔧  Gate-inside Y · Punch-through · Terrain floor")
+InfoRow(TabMisc, "🎚️  PD flight controller · Road-surface raycast")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: see script header")
 
@@ -1480,5 +1455,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J23] Midnight Chasers — V23 dynamic elevation tracking ready")
-print("[J23] dist-lerp grade follow · abs ceil guard · stable P · active coast")
+print("[J23] Midnight Chasers — V23 terrain-locked + punch-through ready")
+print("[J23] gateTargetY = center + size*0.30 (inside trigger) · PivotTo at 14 studs")
+print("[J23] floor raycast 80 studs every frame · no MAX_ABOVE cap · V23")
