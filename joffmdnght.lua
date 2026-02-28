@@ -1,15 +1,15 @@
 --[[
-  JOSEPEDOV V37 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Complete Utility Edition
+  JOSEPEDOV V38 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | The Polish Edition
 
   ══════════════════════════════════════════════════════════════
-  V37 RESTORATION & EXPANSION
+  V38 RESTORATION 
   ══════════════════════════════════════════════════════════════
-  - Fully uncompressed the codebase to prevent syntax errors and 
-    stuck loading screens (Line count restored to ~1400+).
-  - Restored Infinite Nitro which was accidentally removed.
-  - Features Active: AutoRace, Sky Road Speed Farm, Anti-AFK, 
-    Instant Auto-Flip, Ghost Mode, Aero Grip, Speedhack.
+  - Restored the missing Loading Screen UI Prints (The route dots 
+    and labels now correctly light up green as the script loads).
+  - Restored F9 Developer Console prints.
+  - Maintains all V37 features: AutoRace, Speed Farm, Anti-AFK, 
+    Ghost Mode, Auto-Flip, Aero Grip, Inf Nitro, and Speed Hack.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -85,10 +85,48 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V37  ·  COMPLETE UTILITY EDITION"
+subLbl.Text   = "JOSEPEDOV V38  ·  THE POLISH EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
+
+local routeY = 0.50
+local ROUTE_LABELS = {"🚦 QUEUE","◆ CP 27","◆ CP 28","◆ CP 29","🏁 FINISH"}
+local routeDots = {}
+
+for i, label in ipairs(ROUTE_LABELS) do
+    local xpct = (i-1)/(#ROUTE_LABELS-1)*0.7+0.15
+    if i > 1 then
+        local prevX = (i-2)/(#ROUTE_LABELS-1)*0.7+0.15
+        local lf = Instance.new("Frame",bg)
+        lf.Size  = UDim2.new(xpct-prevX,-4,0,2)
+        lf.Position = UDim2.new(prevX,6,routeY,4)
+        lf.BackgroundColor3 = Color3.fromRGB(20,40,30)
+        lf.BorderSizePixel = 0
+        routeDots[i] = routeDots[i] or {}
+        routeDots[i].line = lf
+    end
+    
+    local dot = Instance.new("Frame",bg)
+    dot.Size = UDim2.new(0,10,0,10)
+    dot.Position = UDim2.new(xpct,-5,routeY,0)
+    dot.BackgroundColor3 = Color3.fromRGB(20,40,30)
+    dot.BorderSizePixel = 0
+    Instance.new("UICorner",dot).CornerRadius = UDim.new(0,5)
+    
+    local lbl2 = Instance.new("TextLabel",bg)
+    lbl2.Size = UDim2.new(0,80,0,16)
+    lbl2.Position = UDim2.new(xpct,-40,routeY,14)
+    lbl2.BackgroundTransparency=1
+    lbl2.Text = label
+    lbl2.TextColor3 = Color3.fromRGB(30,55,40)
+    lbl2.Font = Enum.Font.Code
+    lbl2.TextSize = 10
+    
+    routeDots[i] = routeDots[i] or {}
+    routeDots[i].dot = dot
+    routeDots[i].lbl = lbl2
+end
 
 local barTrack = Instance.new("Frame",bg)
 barTrack.Size = UDim2.new(0.5,0,0,5)
@@ -142,20 +180,42 @@ local CAM_ROUTE = {
     {CFrame.lookAt(Vector3.new(3180,75,1100),  Vector3.new(2900,0,700))},
     {CFrame.lookAt(Vector3.new(2900,40,600),   Vector3.new(2513,0,411))},
     {CFrame.lookAt(Vector3.new(2650,55,480),   Vector3.new(2981,0,537))},
+    {CFrame.lookAt(Vector3.new(3050,45,450),   Vector3.new(3485,0,622))},
+    {CFrame.lookAt(Vector3.new(3380,60,750),   Vector3.new(3485,0,622))},
 }
 cam.CFrame = CAM_ROUTE[1][1]
 
-local function SetProg(pct, msg)
+-- ── V38 FIX: RESTORED FULL UI PRINTS AND ROUTE ANIMATIONS ──
+local function SetProg(pct, msg, activeDot)
     TweenService:Create(barFill, TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
         {Size=UDim2.new(pct/100,0,1,0)}):Play()
     barTxt.Text = string.format("  %d%%  —  %s", math.floor(pct), msg)
+    
+    local ci = math.max(1,math.min(#CAM_ROUTE, math.round(pct/100*#CAM_ROUTE+0.5)))
+    TweenService:Create(cam, TweenInfo.new(1.2,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
+        {CFrame=CAM_ROUTE[ci][1]}):Play()
+        
+    for i,d in ipairs(routeDots) do
+        local on = activeDot and i<=activeDot
+        local col = on and Color3.fromRGB(0,170,120) or Color3.fromRGB(20,40,30)
+        local tc  = on and Color3.fromRGB(0,200,140) or Color3.fromRGB(30,55,40)
+        if d.dot then 
+            TweenService:Create(d.dot,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() 
+        end
+        if d.lbl then 
+            d.lbl.TextColor3 = tc 
+        end
+        if d.line then 
+            TweenService:Create(d.line,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() 
+        end
+    end
 end
 
 -- ─────────────────────────────────────────────────────────────
 --  CONFIG & STATE
 -- ─────────────────────────────────────────────────────────────
-SetProg(20, "Loading Configurations...")
-task.wait(0.2)
+SetProg(5, "Reading Configurations...", 1)
+task.wait(0.3)
 
 local Config = {
     AutoRace       = false,
@@ -194,8 +254,8 @@ local FARM_POS  = Vector3.new(0, 10000, 0)
 -- ─────────────────────────────────────────────────────────────
 --  SPEED FARM INFINITE ROAD
 -- ─────────────────────────────────────────────────────────────
-SetProg(40, "Building Infinite Sky Road...")
-task.wait(0.2)
+SetProg(20, "Building Infinite Sky Road...", 2)
+task.wait(0.3)
 
 local farmRoad = Instance.new("Part")
 farmRoad.Name = "Joff_SpeedFarmRoad"
@@ -299,7 +359,6 @@ local function FlipCar()
         local cf = c:GetPivot()
         local pos = cf.Position
         local look = cf.LookVector
-        -- Create a perfectly flat CFrame hovering slightly above ground
         local flatCFrame = CFrame.lookAt(pos + Vector3.new(0, 5, 0), pos + Vector3.new(look.X, 0, look.Z))
         c:PivotTo(flatCFrame)
         c.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
@@ -310,8 +369,8 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  RACE HELPERS
 -- ─────────────────────────────────────────────────────────────
-SetProg(60, "Calibrating Race Route Logic...")
-task.wait(0.2)
+SetProg(40, "Calibrating Race Route Logic...", 3)
+task.wait(0.3)
 
 local function FindPlayerRaceFolder()
     local racesWS = Workspace:FindFirstChild("Races")
@@ -368,6 +427,9 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  AUTO-RACE ENGINE
 -- ─────────────────────────────────────────────────────────────
+SetProg(60, "Hooking Auto-Queue Engine...", 4)
+task.wait(0.3)
+
 local GATE_INSIDE  = 0.10 
 local TRIGGER_DIST = 25   
 
@@ -546,10 +608,10 @@ local function DoRaceLoop(uuidFolder)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  UI BUILDER (FULLY UNCOMPRESSED)
+--  UI BUILDER
 -- ─────────────────────────────────────────────────────────────
-SetProg(80, "Assembling Fluent UI...")
-task.wait(0.2)
+SetProg(80, "Assembling Fluent UI...", 4)
+task.wait(0.3)
 
 local Theme = {
     Background = Color3.fromRGB(24, 24, 28),
@@ -607,7 +669,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V37"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V38"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1065,7 +1127,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  V37"
+arSub.Text   = "City Highway Race  ·  V38"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1292,10 +1354,10 @@ local function InfoRow(parent, text)
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
 
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V37")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V38")
 InfoRow(TabMisc, "🔧  Complete Utility & Farming Edition")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Re-added Infinite Nitro.")
+InfoRow(TabMisc, "📋  Changelog: Restored Visual Loading Prints.")
 
 -- Init default tab
 if AllTabs[1] and AllTabBtns[1] then
@@ -1305,7 +1367,7 @@ if AllTabs[1] and AllTabBtns[1] then
     AllTabBtns[1].Ind.Visible = true
 end
 
-SetProg(95, "Finalising System Hooks...")
+SetProg(95, "Finalising System Hooks...", 4)
 task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
@@ -1346,7 +1408,7 @@ RunService.Heartbeat:Connect(function()
     local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
     local root = currentCar.PrimaryPart or currentSeat
 
-    -- ── INFINITE NITRO RESTORATION ──────────────────────────────
+    -- ── INFINITE NITRO ──────────────────────────────
     if Config.InfNitro then
         local valObj = nil
         if iface then 
@@ -1478,7 +1540,7 @@ end)
 -- ─────────────────────────────────────────────────────────────
 --  DISMISS LOADING SCREEN
 -- ─────────────────────────────────────────────────────────────
-SetProg(100, "Ready!")
+SetProg(100, "Ready!", 5)
 task.wait(0.5)
 
 if loadAnimConn then 
@@ -1507,4 +1569,8 @@ if loadGui then
     loadGui:Destroy() 
 end
 
-print("[J37] Midnight Chasers — V37 Full Execution Complete")
+print("\n═════════════════════════════════════════════════")
+print("[J38] Midnight Chasers — V38 Polish Edition Ready")
+print("[J38] Developed by josepedov")
+print("[J38] Active Hooks: AutoRace, Farm, Anti-AFK, Nitro")
+print("═════════════════════════════════════════════════\n")
