@@ -1,60 +1,16 @@
 --[[
-  JOSEPEDOV V40 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | AI Assistant Edition
+  JOSEPEDOV V39 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
-  V40 FEATURE — GEMINI AI INTEGRATION
+  V39 FIXES & ADDITIONS
   ══════════════════════════════════════════════════════════════
-  - Integrated Google's Gemini API directly into the client.
-  - The main engine is now wrapped in a diagnostic pcall.
-  - If the script crashes, it automatically sends the crash log 
-    to Gemini and prints the AI's suggested fix to the F9 Console.
-  - Maintains all V39 Features (Farm, Race, World Mods, Physics).
+  - Restored missing World functions (Traffic/FPS/FullBright).
+  - Added dedicated "Farm Cruising Speed" slider to the Farm Tab.
+  - Safe-wrapped executor-specific functions like getconnections().
+  - Maintains all previous features.
   ══════════════════════════════════════════════════════════════
 ]]
-
--- ─────────────────────────────────────────────────────────────
---  🤖 GEMINI AI CONFIGURATION
--- ─────────────────────────────────────────────────────────────
--- GET YOUR FREE API KEY AT: https://aistudio.google.com/app/apikey
--- Replace the text below with your actual API key:
-local GEMINI_API_KEY = "AIzaSyAWwPHJHnkaBeGdM0zSNQryDGeKZSz49x8" 
-local GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" .. GEMINI_API_KEY
-
-local HttpService = game:GetService("HttpService")
-
-local function AskGemini(promptText)
-    if GEMINI_API_KEY == "PUT_YOUR_GEMINI_API_KEY_HERE" then
-        return "⚠️ Error: You forgot to put your Gemini API Key at the top of the script!"
-    end
-
-    local fetch = request or http_request or (syn and syn.request)
-    if not fetch then
-        return "❌ Error: Your Roblox executor does not support HTTP requests."
-    end
-
-    local payload = {
-        contents = { { parts = { { text = promptText } } } }
-    }
-
-    local response = fetch({
-        Url = GEMINI_URL,
-        Method = "POST",
-        Headers = { ["Content-Type"] = "application/json" },
-        Body = HttpService:JSONEncode(payload)
-    })
-
-    if response.StatusCode == 200 then
-        local data = HttpService:JSONDecode(response.Body)
-        if data.candidates and data.candidates[1] and data.candidates[1].content.parts[1] then
-            return data.candidates[1].content.parts[1].text
-        end
-    else
-        return "API Request Failed! Code: " .. tostring(response.StatusCode) .. "\n" .. tostring(response.Body)
-    end
-    return "Unknown AI Error."
-end
-
 
 -- ─────────────────────────────────────────────────────────────
 --  SERVICES & PLAYER
@@ -71,15 +27,22 @@ local CoreGui          = game:GetService("CoreGui")
 local StarterGui       = game:GetService("StarterGui")
 local player           = Players.LocalPlayer
 
+-- Force landscape on mobile
 pcall(function() StarterGui.ScreenOrientation = Enum.ScreenOrientation.LandscapeRight end)
 pcall(function() player.PlayerGui.ScreenOrientation = Enum.ScreenOrientation.LandscapeRight end)
 
+-- GUI mount target
 local guiTarget = (type(gethui)=="function" and gethui())
     or (pcall(function() return game:GetService("CoreGui") end) and CoreGui)
     or player:WaitForChild("PlayerGui")
 
-if guiTarget:FindFirstChild("MC_V22") then guiTarget.MC_V22:Destroy() end
-if guiTarget:FindFirstChild("MC_V22_Load") then guiTarget.MC_V22_Load:Destroy() end
+-- Anti-overlap: destroy any previous instances
+if guiTarget:FindFirstChild("MC_V22") then 
+    guiTarget.MC_V22:Destroy() 
+end
+if guiTarget:FindFirstChild("MC_V22_Load") then 
+    guiTarget.MC_V22_Load:Destroy() 
+end
 
 -- ─────────────────────────────────────────────────────────────
 --  LOADING SCREEN
@@ -121,7 +84,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V40  ·  AI ASSISTANT EDITION"
+subLbl.Text   = "JOSEPEDOV V39  ·  ULTIMATE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -231,9 +194,15 @@ local function SetProg(pct, msg, activeDot)
         local on = activeDot and i<=activeDot
         local col = on and Color3.fromRGB(0,170,120) or Color3.fromRGB(20,40,30)
         local tc  = on and Color3.fromRGB(0,200,140) or Color3.fromRGB(30,55,40)
-        if d.dot then TweenService:Create(d.dot,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() end
-        if d.lbl then d.lbl.TextColor3 = tc end
-        if d.line then TweenService:Create(d.line,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() end
+        if d.dot then 
+            TweenService:Create(d.dot,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() 
+        end
+        if d.lbl then 
+            d.lbl.TextColor3 = tc 
+        end
+        if d.line then 
+            TweenService:Create(d.line,TweenInfo.new(0.25),{BackgroundColor3=col}):Play() 
+        end
     end
 end
 
@@ -246,7 +215,7 @@ task.wait(0.3)
 local Config = {
     AutoRace       = false,
     SpeedFarm      = false,
-    FarmSpeed      = 250,
+    FarmSpeed      = 250, -- NEW: Separate Speed for Auto-Farm
     AntiAFK        = false,
     GhostMode      = false,
     SpeedHack      = false,
@@ -274,7 +243,6 @@ local AR_STATE       = "IDLE"
 local raceThread     = nil
 local raceOwnsStatus = false
 local lastModsState  = false
-local engineErrored  = false -- Tracker for the AI system
 
 local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
 local FARM_POS  = Vector3.new(0, 10000, 0)
@@ -307,7 +275,7 @@ player.Idled:Connect(function()
 end)
 
 -- ─────────────────────────────────────────────────────────────
---  WORLD MODIFIERS
+--  WORLD & PERFORMANCE HELPERS (RESTORED IN V39)
 -- ─────────────────────────────────────────────────────────────
 SetProg(35, "Restoring World Modifiers...", 3)
 task.wait(0.2)
@@ -766,7 +734,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V40 (AI)"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V39"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1224,7 +1192,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  V40"
+arSub.Text   = "City Highway Race  ·  V39"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1365,6 +1333,7 @@ FluentToggle(TabFarm, "🏎️ Auto Speed Farm", "Teleports car to an infinite s
     return v
 end)
 
+-- ── V39 FIX: Added Farm Cruising Speed Slider ──
 Section(TabFarm, "  FARM SETTINGS")
 FluentSlider(TabFarm, "Farm Cruising Speed", 50, 400, Config.FarmSpeed, 250, 
     function() return Config.FarmSpeed end, 
@@ -1418,7 +1387,7 @@ FluentStepper(TabCar, "Boost Power", "%.1f",
     function() Config.Acceleration=math.max(0.5,Config.Acceleration-0.5) end,
     function() Config.Acceleration=Config.Acceleration+0.5 end)
 
--- ── WORLD TAB ─────────────────────────────────────────────────
+-- ── WORLD TAB (RESTORED) ──────────────────────────────────────
 Section(TabWorld, "  TRAFFIC")
 FluentToggle(TabWorld, "🚫 Kill Traffic", "Remove NPC vehicles from world", function() 
     return ToggleTraffic() 
@@ -1456,10 +1425,10 @@ local function InfoRow(parent, text)
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
 
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V40")
-InfoRow(TabMisc, "🤖  Gemini AI Assistant Edition")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V39")
+InfoRow(TabMisc, "🔧  Ultimate Complete Edition")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Gemini API Error Diagnostic added.")
+InfoRow(TabMisc, "📋  Changelog: Restored World mods & added Farm Speed.")
 
 -- Init default tab
 if AllTabs[1] and AllTabBtns[1] then
@@ -1469,206 +1438,180 @@ if AllTabs[1] and AllTabBtns[1] then
     AllTabBtns[1].Ind.Visible = true
 end
 
-SetProg(95, "Finalising AI Hooks...", 5)
+SetProg(95, "Finalising System Hooks...", 5)
 task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
---  HEARTBEAT — state machine + AI Wrapper
+--  HEARTBEAT — state machine + SpeedHack + Farm Loop
 -- ═══════════════════════════════════════════════════════════════
 RunService.Heartbeat:Connect(function()
 
-    if engineErrored then return end -- Stop completely if we crashed to prevent API spam
+    if Config.FullBright then
+        Lighting.Ambient = Color3.new(1,1,1)
+        Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        Lighting.ClockTime = 12
+    end
 
-    local success, err = pcall(function()
-        
-        if Config.FullBright then
-            Lighting.Ambient = Color3.new(1,1,1)
-            Lighting.OutdoorAmbient = Color3.new(1,1,1)
-            Lighting.ClockTime = 12
-        end
+    local ch = player.Character
+    if not ch or not ch:FindFirstChild("Humanoid") then return end
+    currentSeat = ch.Humanoid.SeatPart
+    if not currentSeat or not currentSeat:IsA("VehicleSeat") then
+        currentCar = nil
+        return
+    end
+    currentCar = currentSeat.Parent
+    
+    local wantsMods = Config.TireGrip
+    if wantsMods ~= lastModsState then
+        ManagePhysicsMods(currentCar)
+        lastModsState = wantsMods
+    end
 
-        local ch = player.Character
-        if not ch or not ch:FindFirstChild("Humanoid") then return end
-        currentSeat = ch.Humanoid.SeatPart
-        if not currentSeat or not currentSeat:IsA("VehicleSeat") then
-            currentCar = nil
-            return
-        end
-        currentCar = currentSeat.Parent
-        
-        local wantsMods = Config.TireGrip
-        if wantsMods ~= lastModsState then
-            ManagePhysicsMods(currentCar)
-            lastModsState = wantsMods
-        end
+    local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
+    local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
+    if iface and iface:FindFirstChild("Values") then
+        local v = iface.Values
+        if v:FindFirstChild("Throttle") then gasVal   = v.Throttle.Value end
+        if v:FindFirstChild("Brake")    then brakeVal = v.Brake.Value    end
+        if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
+    end
+    
+    local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
+    local root = currentCar.PrimaryPart or currentSeat
 
-        local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
-        local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
-        if iface and iface:FindFirstChild("Values") then
-            local v = iface.Values
-            if v:FindFirstChild("Throttle") then gasVal   = v.Throttle.Value end
-            if v:FindFirstChild("Brake")    then brakeVal = v.Brake.Value    end
-            if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
+    -- ── INFINITE NITRO ──────────────────────────────
+    if Config.InfNitro then
+        local valObj = nil
+        if iface then 
+            valObj = iface:FindFirstChild("Values") 
         end
-        
-        local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
-        local root = currentCar.PrimaryPart or currentSeat
-
-        -- ── INFINITE NITRO ──────────────────────────────
-        if Config.InfNitro then
-            local valObj = nil
-            if iface then 
-                valObj = iface:FindFirstChild("Values") 
-            end
-            if not valObj then 
-                valObj = currentCar:FindFirstChild("Values", true) 
-            end
-            if valObj then
-                local maxB = valObj:GetAttribute("MaxBoost")
-                if maxB and maxB > 0 then
-                    valObj:SetAttribute("CurrentBoost", maxB)
-                end
+        if not valObj then 
+            valObj = currentCar:FindFirstChild("Values", true) 
+        end
+        if valObj then
+            local maxB = valObj:GetAttribute("MaxBoost")
+            if maxB and maxB > 0 then
+                valObj:SetAttribute("CurrentBoost", maxB)
             end
         end
+    end
 
-        -- ── GHOST MODE ──────────────────────────────────────────────
-        if Config.GhostMode then
-            for _, p in ipairs(currentCar:GetDescendants()) do
-                if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not string.find(p.Name:lower(), "wheel") then
-                    p.CanCollide = false
-                end
-            end
-            for _, p in ipairs(ch:GetDescendants()) do
-                if p:IsA("BasePart") then 
-                    p.CanCollide = false 
-                end
+    -- ── GHOST MODE ──────────────────────────────────────────────
+    if Config.GhostMode then
+        for _, p in ipairs(currentCar:GetDescendants()) do
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not string.find(p.Name:lower(), "wheel") then
+                p.CanCollide = false
             end
         end
-
-        -- ── AUTO SPEED FARM ─────────────────────────────────────────
-        if Config.SpeedFarm then
-            if root and root:IsA("BasePart") then
-                farmRoad.CFrame = CFrame.new(root.Position.X, 9995, root.Position.Z)
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.AssemblyLinearVelocity = root.CFrame.LookVector * Config.FarmSpeed
-                SetStatus("🚜 Auto-Farm Active — Speeding on Sky Road", 0, 255, 100)
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then 
+                p.CanCollide = false 
             end
-            return 
         end
+    end
 
-        -- ── AutoRace state machine ──────────────────────────────────
-        if Config.AutoRace then
-            if AR_STATE == "QUEUING" then
-                local uuidF, stateV = FindPlayerRaceFolder()
-                if uuidF then
-                    local sv = stateV and stateV.Value or ""
-                    if sv == "Racing" then
-                        AR_STATE="RACING"
-                        UpdateARVisual()
-                        if not raceThread then 
-                            raceThread = task.spawn(DoRaceLoop, uuidF) 
-                        end
-                    else
-                        AR_STATE="STARTING"
-                        UpdateARVisual()
-                    end
-                end
-            elseif AR_STATE == "STARTING" then
-                local uuidF, stateV = FindPlayerRaceFolder()
-                if uuidF then
-                    local sv = stateV and stateV.Value or ""
-                    if sv == "Racing" then
-                        AR_STATE="RACING"
-                        UpdateARVisual()
-                        if not raceThread then 
-                            raceThread = task.spawn(DoRaceLoop, uuidF) 
-                        end
+    -- ── AUTO SPEED FARM ─────────────────────────────────────────
+    if Config.SpeedFarm then
+        if root and root:IsA("BasePart") then
+            -- Keep the runway centered exactly underneath the car
+            farmRoad.CFrame = CFrame.new(root.Position.X, 9995, root.Position.Z)
+            
+            -- Lock orientation to prevent flipping on the flat road
+            root.AssemblyAngularVelocity = Vector3.zero
+            
+            -- Force car perfectly straight forward at FARM speed
+            root.AssemblyLinearVelocity = root.CFrame.LookVector * Config.FarmSpeed
+            SetStatus("🚜 Auto-Farm Active — Speeding on Sky Road", 0, 255, 100)
+        end
+        return -- Skip normal AutoRace processing while farming
+    end
+
+    -- ── AutoRace state machine ──────────────────────────────────
+    if Config.AutoRace then
+        if AR_STATE == "QUEUING" then
+            local uuidF, stateV = FindPlayerRaceFolder()
+            if uuidF then
+                local sv = stateV and stateV.Value or ""
+                if sv == "Racing" then
+                    AR_STATE="RACING"
+                    UpdateARVisual()
+                    if not raceThread then 
+                        raceThread = task.spawn(DoRaceLoop, uuidF) 
                     end
                 else
-                    AR_STATE="QUEUING"
+                    AR_STATE="STARTING"
                     UpdateARVisual()
                 end
-            elseif AR_STATE == "RACING" then
-                if AR_STATE ~= "RACING" then 
-                    UpdateARVisual() 
+            end
+        elseif AR_STATE == "STARTING" then
+            local uuidF, stateV = FindPlayerRaceFolder()
+            if uuidF then
+                local sv = stateV and stateV.Value or ""
+                if sv == "Racing" then
+                    AR_STATE="RACING"
+                    UpdateARVisual()
+                    if not raceThread then 
+                        raceThread = task.spawn(DoRaceLoop, uuidF) 
+                    end
                 end
+            else
+                AR_STATE="QUEUING"
+                UpdateARVisual()
             end
-            return
+        elseif AR_STATE == "RACING" then
+            if AR_STATE ~= "RACING" then 
+                UpdateARVisual() 
+            end
         end
+        return
+    end
 
-        if AR_STATE ~= "IDLE" then
-            AR_STATE="IDLE"
-            UpdateARVisual()
-            if raceThread then 
-                task.cancel(raceThread)
-                raceThread=nil 
-            end
-            if not Config.GhostMode then 
-                RestoreCollisions() 
-            end
-            raceOwnsStatus = false
-            SetStatus("AutoRace OFF")
+    if AR_STATE ~= "IDLE" then
+        AR_STATE="IDLE"
+        UpdateARVisual()
+        if raceThread then 
+            task.cancel(raceThread)
+            raceThread=nil 
         end
+        if not Config.GhostMode then 
+            RestoreCollisions() 
+        end
+        raceOwnsStatus = false
+        SetStatus("AutoRace OFF")
+    end
 
-        -- ── SPEED HACK OVERRIDE ─────────────────────────────────────
-        if Config.SpeedHack then
-            if root and root:IsA("BasePart") then
-                local rp = RaycastParams.new()
-                rp.FilterDescendantsInstances = {ch, currentCar}
-                rp.FilterType = Enum.RaycastFilterType.Exclude
-                local grounded = Workspace:Raycast(root.Position, Vector3.new(0,-5,0), rp)
-                
-                if gasVal > Config.Deadzone and not isRev then
-                    if grounded then
-                        if root.AssemblyLinearVelocity.Magnitude < Config.MaxSpeed then
-                            root.AssemblyLinearVelocity += root.CFrame.LookVector * Config.Acceleration
-                            SetStatus("SpeedHack: BOOSTING", 0, 215, 80)
-                        else
-                            SetStatus("SpeedHack: MAX SPEED", 255, 200, 0)
-                        end
+    -- ── SPEED HACK OVERRIDE ─────────────────────────────────────
+    if Config.SpeedHack then
+        if root and root:IsA("BasePart") then
+            local rp = RaycastParams.new()
+            rp.FilterDescendantsInstances = {ch, currentCar}
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            local grounded = Workspace:Raycast(root.Position, Vector3.new(0,-5,0), rp)
+            
+            if gasVal > Config.Deadzone and not isRev then
+                if grounded then
+                    if root.AssemblyLinearVelocity.Magnitude < Config.MaxSpeed then
+                        root.AssemblyLinearVelocity += root.CFrame.LookVector * Config.Acceleration
+                        SetStatus("SpeedHack: BOOSTING", 0, 215, 80)
                     else
-                        SetStatus("SpeedHack: AIRBORNE", 200, 80, 80)
+                        SetStatus("SpeedHack: MAX SPEED", 255, 200, 0)
                     end
                 else
-                    SetStatus(isRev and "Reversing..." or "Status: Idle")
+                    SetStatus("SpeedHack: AIRBORNE", 200, 80, 80)
                 end
-            end
-        else
-            if not raceOwnsStatus then
-                SetStatus("Status: Idle")
+            else
+                SetStatus(isRev and "Reversing..." or "Status: Idle")
             end
         end
-        
-    end) -- End of pcall wrapper
-
-    -- ── V40 FIX: THE AI DIAGNOSTIC TRIGGER ──
-    if not success then
-        engineErrored = true
-        warn("⚠️ [V40] CRITICAL ENGINE ERROR: " .. tostring(err))
-        
-        if _statusLbl then
-            _statusLbl.Text = "  ⚠️ SCRIPT CRASHED - PRESS F9 FOR AI FIX"
-            _statusLbl.TextColor3 = Color3.fromRGB(255, 50, 50)
-        end
-        
-        -- Spawn a new thread so the API call doesn't freeze the client
-        task.spawn(function()
-            print("🤖 [V40] Contacting Gemini AI for a diagnostic... Please wait.")
-            local prompt = "I am writing a Roblox Luau exploit script and got this error in my Heartbeat loop: '" .. tostring(err) .. "'. Give me a short, 2-sentence explanation of what went wrong and how to fix it."
-            
-            local aiResponse = AskGemini(prompt)
-            
-            print("\n✨ ───── GEMINI AI DIAGNOSIS ───── ✨")
-            print(aiResponse or "AI could not generate a response.")
-            print("✨ ─────────────────────────────── ✨\n")
-        end)
+    else
+        SetStatus("Status: Idle")
     end
 end)
 
 -- ─────────────────────────────────────────────────────────────
 --  DISMISS LOADING SCREEN
 -- ─────────────────────────────────────────────────────────────
-SetProg(100, "Ready!", 5)
+SetProg(100, "Ready!")
 task.wait(0.5)
 
 if loadAnimConn then 
@@ -1698,7 +1641,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J40] Midnight Chasers — V40 AI Assistant Ready")
-print("[J40] Developed by josepedov")
-print("[J40] Active Hooks: AutoRace, Farm, Anti-AFK, AI")
+print("[J39] Midnight Chasers — V39 Ultimate Edition Ready")
+print("[J39] Developed by josepedov")
+print("[J39] Active Hooks: AutoRace, AutoFarm, Anti-AFK, World Mods")
 print("═════════════════════════════════════════════════\n")
