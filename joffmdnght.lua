@@ -1,15 +1,18 @@
 --[[
-  JOSEPEDOV V31 — MIDNIGHT CHASERS
+  JOSEPEDOV V32 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Auto-Queue & Client Mods
 
   ══════════════════════════════════════════════════════════════
-  V31 FEATURE — TOKYO DRIFT MODE
+  V32 FIX — PERFECT PHYSICS & DRIFT FORCING
   ══════════════════════════════════════════════════════════════
-  - Added "Drift Mode" to the Car Tab.
-  - Dynamically detects Front vs Rear wheels and applies an
-    asymmetrical low-friction tune (rear is extra slippery, 
-    front retains steering grip) to allow continuous sliding.
-  - UI now intelligently toggles Grip/Drift mutually exclusive.
+  - Renamed "Stage 3 Engine Override" back to "Speed Hack" so it 
+    is no longer missing.
+  - Fixed extreme shaking when enabling Grip/Drift. The script now 
+    reads and preserves the original Wheel Density/Weight and ONLY 
+    modifies friction.
+  - A-Chassis dynamically resets wheel friction. The engine now 
+    forces the Grip/Drift properties inside the Heartbeat loop to 
+    prevent the game from overwriting your drift tune.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -79,7 +82,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V31  ·  TOKYO DRIFT EDITION"
+subLbl.Text   = "JOSEPEDOV V32  ·  PERFECT PHYSICS EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -211,7 +214,7 @@ local Config = {
     AutoRaceSpeed  = 350,
     Deadzone       = 0.1,
     TireGrip       = false,
-    DriftMode      = false, -- New V31 feature
+    DriftMode      = false, 
 }
 local AR_SPEED_CAP = 600
 
@@ -229,42 +232,9 @@ local disabledCar    = nil
 local AR_STATE       = "IDLE"
 local raceThread     = nil
 local raceOwnsStatus = false
-local lastCarProcessed = nil
+local lastModsState  = false -- Tracker for physics reset
 
 local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
-
--- ─────────────────────────────────────────────────────────────
---  CAR PHYSICS MODIFICATION ENGINE (V31)
--- ─────────────────────────────────────────────────────────────
-local function ApplyCarMods(car)
-    if not car then return end
-    local wheels = car:FindFirstChild("Wheels")
-    if not wheels then return end
-    
-    for _, w in ipairs(wheels:GetDescendants()) do
-        if w:IsA("BasePart") then
-            if Config.TireGrip then
-                -- MAX GRIP: High friction and weight overrides the road
-                w.CustomPhysicalProperties = PhysicalProperties.new(20, 1.5, 0, 100, 100)
-                
-            elseif Config.DriftMode then
-                -- DRIFT TUNE: Asymmetrical friction setup
-                local n = w.Name:upper()
-                if n == "RL" or n == "RR" or string.find(n, "REAR") then
-                    -- Rear wheels: extremely slippery so the tail kicks out
-                    w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.05, 0, 100, 100)
-                else
-                    -- Front wheels: mild slip but retains enough friction to steer
-                    w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.3, 0, 100, 100)
-                end
-                
-            else
-                -- DEFAULT: Reset to normal standard friction
-                w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.7, 0.3, 1, 1)
-            end
-        end
-    end
-end
 
 -- ─────────────────────────────────────────────────────────────
 --  COLLISION HELPERS
@@ -615,7 +585,7 @@ task.wait(0.3)
 --  FLUENT UI  (based on Fluent Local UI Framework template)
 -- ═══════════════════════════════════════════════════════════════
 
--- Theme (Fluent Green accent matching the game's green neon aesthetic)
+-- Theme
 local Theme = {
     Background = Color3.fromRGB(24, 24, 28),
     Sidebar    = Color3.fromRGB(18, 18, 22),
@@ -635,7 +605,6 @@ ScreenGui.Name          = "MC_V22"
 ScreenGui.ResetOnSpawn  = false
 ScreenGui.IgnoreGuiInset = true
 
--- ── Toggle icon (minimised state) ──
 local ToggleIcon = Instance.new("TextButton", ScreenGui)
 ToggleIcon.Size   = UDim2.new(0,45,0,45)
 ToggleIcon.Position = UDim2.new(0.5,-22,0.05,0)
@@ -649,7 +618,6 @@ local IconStroke = Instance.new("UIStroke",ToggleIcon)
 IconStroke.Color = Theme.Accent
 IconStroke.Thickness = 2
 
--- ── Main window ──
 local MainFrame = Instance.new("Frame", ScreenGui)
 MainFrame.Size   = UDim2.new(0,420,0,280)
 MainFrame.Position = UDim2.new(0.5,-210,0.5,-140)
@@ -661,7 +629,6 @@ local MainStroke = Instance.new("UIStroke",MainFrame)
 MainStroke.Color = Theme.Stroke
 MainStroke.Transparency = 0.4
 
--- ── Top bar ──
 local TopBar = Instance.new("Frame", MainFrame)
 TopBar.Size = UDim2.new(1,0,0,32)
 TopBar.BackgroundTransparency = 1
@@ -669,21 +636,19 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V31"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V32"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.BackgroundTransparency = 1
 
--- Separator line under top bar
 local Sep = Instance.new("Frame",MainFrame)
 Sep.Size = UDim2.new(1,-20,0,1)
 Sep.Position = UDim2.new(0,10,0,32)
 Sep.BackgroundColor3 = Theme.Stroke
 Sep.BorderSizePixel = 0
 
--- Window controls
 local function AddCtrl(text, pos, color, cb)
     local b = Instance.new("TextButton", TopBar)
     b.Size   = UDim2.new(0,28,0,22)
@@ -707,7 +672,6 @@ ToggleIcon.MouseButton1Click:Connect(function()
     ToggleIcon.Visible = false
 end)
 
--- ── Native drag ──
 local function EnableDrag(obj, handle)
     local drag, ipt, start, startPos
     handle.InputBegan:Connect(function(i)
@@ -732,7 +696,6 @@ end
 EnableDrag(MainFrame, TopBar)
 EnableDrag(ToggleIcon, ToggleIcon)
 
--- ── Sidebar ──
 local Sidebar = Instance.new("Frame", MainFrame)
 Sidebar.Size   = UDim2.new(0,108,1,-33)
 Sidebar.Position = UDim2.new(0,0,0,33)
@@ -746,13 +709,11 @@ SidebarLayout.Padding = UDim.new(0,5)
 SidebarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 Instance.new("UIPadding",Sidebar).PaddingTop = UDim.new(0,10)
 
--- ── Content area ──
 local ContentArea = Instance.new("Frame", MainFrame)
 ContentArea.Size   = UDim2.new(1,-118,1,-38)
 ContentArea.Position = UDim2.new(0,113,0,38)
 ContentArea.BackgroundTransparency = 1
 
--- ── Tab system ──
 local AllTabs    = {}
 local AllTabBtns = {}
 
@@ -1072,7 +1033,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Auto-Queue V31"
+arSub.Text   = "City Highway Race  ·  Perfect Physics V32"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1170,43 +1131,39 @@ arRow.MouseButton1Click:Connect(function()
 end)
 
 -- ── CAR TAB ───────────────────────────────────────────────────
-Section(TabCar, "  PHYSICS MODS (FREE)")
+Section(TabCar, "  DRIVING")
+FluentToggle(TabCar, "⚡ Speed Hack", "Override car top speed & acceleration",
+    function(v) Config.SpeedHack=v; return v end)
 
--- Pre-declare our toggle references so they can talk to each other
+Section(TabCar, "  PHYSICS MODS (FREE)")
 local setGripToggle
 local setDriftToggle
 
-setGripToggle = FluentToggle(TabCar, "🛞 Pro Racing Tires (Grip Hack)", "Overrides physical wheel friction for max traction",
+setGripToggle = FluentToggle(TabCar, "🛞 Pro Racing Tires (Grip Hack)", "Increases wheel friction for max traction",
     function(v) 
         Config.TireGrip = v
-        -- Turn off Drift mode if Grip mode is turned on
         if v and setDriftToggle then 
             Config.DriftMode = false
             setDriftToggle(false)
         end
-        ApplyCarMods(currentCar)
         return v 
     end)
 
-setDriftToggle = FluentToggle(TabCar, "💨 Tokyo Drift Mode", "Lowers rear wheel friction for continuous smooth sliding",
+setDriftToggle = FluentToggle(TabCar, "💨 Tokyo Drift Mode", "Lowers rear wheel friction for sliding",
     function(v) 
         Config.DriftMode = v
-        -- Turn off Grip mode if Drift mode is turned on
         if v and setGripToggle then 
             Config.TireGrip = false
             setGripToggle(false)
         end
-        ApplyCarMods(currentCar)
         return v 
     end)
 
-Section(TabCar, "  ENGINE MODS (FREE)")
-FluentToggle(TabCar, "⚡ Stage 3 Engine Override", "Overrides A-Chassis with max speed & acceleration",
-    function(v) Config.SpeedHack=v; return v end)
+Section(TabCar, "  NITRO")
 FluentToggle(TabCar, "🔥 Infinite Nitro", "Keeps CurrentBoost at MaxBoost",
     function(v) Config.InfNitro=v; return v end)
 
-Section(TabCar, "  ENGINE TUNING")
+Section(TabCar, "  SPEED TUNING")
 FluentStepper(TabCar, "Top Speed Override", "%d st/s",
     function() return Config.MaxSpeed end,
     function() Config.MaxSpeed=math.max(50,Config.MaxSpeed-50) end,
@@ -1247,11 +1204,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V31")
-InfoRow(TabMisc, "🔧  Auto-Queue Tracking")
-InfoRow(TabMisc, "🎚️  Drift Mode & Client-Side Free Mods")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V32")
+InfoRow(TabMisc, "🔧  Perfect Physics Engine")
+InfoRow(TabMisc, "🎚️  Heartbeat-Forced Tire Tuning")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Added Tokyo Drift Mode.")
+InfoRow(TabMisc, "📋  Changelog: Fixed shaking & restored Speedhack UI.")
 
 -- Open Race tab by default
 do
@@ -1291,13 +1248,60 @@ RunService.Heartbeat:Connect(function()
     end
     currentCar = currentSeat.Parent
     
-    -- Apply Tire Grip or Drift Tune if we entered a new car
-    if currentCar ~= lastCarProcessed then
-        ApplyCarMods(currentCar)
-        lastCarProcessed = currentCar
+    -- ── V32 FIX: HEARTBEAT PHYSICS FORCER ──
+    -- A-Chassis constantly resets friction based on road material.
+    -- This optimally forces our Grip/Drift tune 60 times a second
+    -- without altering wheel weight (which caused the shaking).
+    if currentCar then
+        local wantsMods = Config.TireGrip or Config.DriftMode
+        
+        if wantsMods then
+            local wheels = currentCar:FindFirstChild("Wheels")
+            if wheels then
+                for _, w in ipairs(wheels:GetDescendants()) do
+                    if w:IsA("BasePart") then
+                        local current = w.CustomPhysicalProperties
+                        -- Preserve the car's original density to prevent spasms
+                        local d  = current and current.Density or 0.7
+                        local e  = current and current.Elasticity or 0.5
+                        local ew = current and current.ElasticityWeight or 1
+                        
+                        if Config.TireGrip then
+                            -- GRIP TUNE: Sane high friction (2.0)
+                            if not current or current.Friction ~= 2.0 then
+                                w.CustomPhysicalProperties = PhysicalProperties.new(d, 2.0, e, 100, ew)
+                            end
+                        elseif Config.DriftMode then
+                            -- DRIFT TUNE: Slippery rear, stable front
+                            local n = w.Name:upper()
+                            local isRear = (string.find(n, "RL") or string.find(n, "RR") or string.find(n, "REAR") or string.find(n, "BACK"))
+                            local targetFriction = isRear and 0.25 or 0.85
+                            if not current or current.Friction ~= targetFriction then
+                                w.CustomPhysicalProperties = PhysicalProperties.new(d, targetFriction, e, 100, ew)
+                            end
+                        end
+                    end
+                end
+            end
+        elseif lastModsState then
+            -- Reset physics back to normal A-Chassis defaults if we just turned the mod off
+            local wheels = currentCar:FindFirstChild("Wheels")
+            if wheels then
+                for _, w in ipairs(wheels:GetDescendants()) do
+                    if w:IsA("BasePart") then
+                        local current = w.CustomPhysicalProperties
+                        local d  = current and current.Density or 0.7
+                        local e  = current and current.Elasticity or 0.5
+                        local ew = current and current.ElasticityWeight or 1
+                        w.CustomPhysicalProperties = PhysicalProperties.new(d, 0.7, e, 100, ew)
+                    end
+                end
+            end
+        end
+        lastModsState = wantsMods
     end
 
-    -- A-Chassis values
+    -- A-Chassis values for SpeedHack
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
     local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
     if iface and iface:FindFirstChild("Values") then
@@ -1367,7 +1371,6 @@ RunService.Heartbeat:Connect(function()
             end
 
         elseif AR_STATE == "RACING" then
-            -- Coroutine owns the car. Heartbeat does nothing.
             if AR_STATE ~= "RACING" then UpdateARVisual() end
         end
 
@@ -1383,7 +1386,7 @@ RunService.Heartbeat:Connect(function()
         SetStatus("AutoRace OFF")
     end
 
-    -- SpeedHack (Stage 3 Engine Override)
+    -- SpeedHack
     local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
     if Config.SpeedHack then
         local rp = RaycastParams.new()
@@ -1436,5 +1439,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J31] Midnight Chasers — V31 Tokyo Drift Edition Ready")
-print("[J31] Drift Mode logic active: Rear wheel friction reduced for perfect sliding.")
+print("[J32] Midnight Chasers — V32 Perfect Physics Edition Ready")
+print("[J32] True wheel density mapping active — no more shaking!")
