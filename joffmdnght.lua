@@ -1,17 +1,17 @@
 --[[
-  JOSEPEDOV V26 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Pure Direct Homing Engine
+  JOSEPEDOV V27 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Anti-Gravity Homing Engine
 
   ══════════════════════════════════════════════════════════════
-  V26 FIX — PURE CENTER HOMING
+  V27 FIX — HOVER-FREEZE & CRUISE CONTROL
   ══════════════════════════════════════════════════════════════
-  - Removed all artificial "Floor Cushions" and "Memory Floors" 
-    that were pushing the car above the checkpoints.
-  - The car now flies in a perfect, straight 3D vector directly 
-    to the middle-center of the next checkpoint.
-  - Added a deep-void catch: It will only push up if the car goes 
-    more than 12 studs deep underground, just to prevent the 
-    server from cancelling the race.
+  - Fixed the void drop: The car now actively forces 0 velocity 
+    every frame while waiting for the next checkpoint to load.
+  - Fixed long-distance sagging: Applied a mathematical anti-gravity 
+    counteract to the Y-axis so the car never drifts downward.
+  - Added "Cruise Control": If the checkpoint is >150 studs away, 
+    the car looks ahead and glides over hills. When <150 studs, it 
+    disables terrain tracking and dives perfectly into the center.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -81,7 +81,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V26  ·  DIRECT HOMING EDITION"
+subLbl.Text   = "JOSEPEDOV V27  ·  ANTI-GRAVITY EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -308,7 +308,7 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
     return best, bestIdx
 end
 
-SetProg(60, "Calibrating Direct Homing engine...", 4)
+SetProg(60, "Calibrating Anti-Gravity engine...", 4)
 task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
@@ -323,10 +323,10 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  THE PURE DIRECT HOMING ENGINE (V26)
+--  THE ANTI-GRAVITY ENGINE (V27)
 -- ─────────────────────────────────────────────────────────────
-local GATE_INSIDE  = 0.10 -- Targets almost EXACTLY the middle-center
-local TRIGGER_DIST = 25   -- Smooth pass-through distance trigger
+local GATE_INSIDE  = 0.10 
+local TRIGGER_DIST = 25   
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -340,11 +340,23 @@ local function DoRaceLoop(uuidFolder)
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
+        -- ① Find next CP gate (With Anti-Void Hover Freeze)
         local gatePart, cpIdx
         local waitForCP = tick() + 15
         repeat
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
-            if not gatePart then task.wait(0.1) end
+            if not gatePart then 
+                -- CRITICAL FIX: If the checkpoint is loading, freeze the car perfectly.
+                -- This prevents the car from free-falling into the void.
+                if currentCar then
+                    local tempRoot = currentCar.PrimaryPart or currentSeat
+                    if tempRoot then
+                        tempRoot.AssemblyLinearVelocity = Vector3.zero
+                        tempRoot.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+                RunService.Heartbeat:Wait()
+            end
         until gatePart or tick() > waitForCP
               or not Config.AutoRace or AR_STATE ~= "RACING"
 
@@ -426,25 +438,40 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── PURE DIRECT HOMING VECTOR ──
-            -- Calculates a perfectly straight 3D line directly to the center sweet spot.
-            -- No terrain cushions to push the car above the checkpoint.
+            -- ── PURE 3D HOMING VECTOR ──
             local dir3D = (targetPos - myPos).Unit
-            local desiredVel = dir3D * arSpeed
+            local desiredVelX = dir3D.X * arSpeed
+            local desiredVelY = dir3D.Y * arSpeed
+            local desiredVelZ = dir3D.Z * arSpeed
 
-            -- ── EMERGENCY VOID CATCH (Only prevents race cancellation) ──
-            -- It does NOT push the car above the road, it only kicks in if the 
-            -- car is 12+ studs literally underneath the terrain mesh.
-            local floorRay = Workspace:Raycast(myPos + Vector3.new(0, 50, 0), Vector3.new(0, -200, 0), rcParams)
-            if floorRay then
-                local roadY = floorRay.Position.Y
-                if myPos.Y < (roadY - 12) then
-                    -- Gently lift upwards if buried deep underground
-                    desiredVel = Vector3.new(desiredVel.X, 40, desiredVel.Z)
+            -- ── ANTI-GRAVITY DRIFT CORRECTION ──
+            -- When a checkpoint is very far away, gravity drags the car downward between frames.
+            -- We mathematically force the Y-axis to stay aligned with the target line.
+            local yErr = targetPos.Y - myPos.Y
+            desiredVelY = desiredVelY + (yErr * 1.5)
+
+            -- ── CRUISE CONTROL (Long Distance Only) ──
+            -- If the checkpoint is >150 studs away, we look 40 studs ahead.
+            -- If the terrain gets within 8 studs, we lift the car to avoid clipping.
+            -- When we get close (<150 studs), this disables so we can accurately dive into the center.
+            if distXZ > 150 then
+                local dirXZ = (targetXZ - myXZ).Unit
+                local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 50, 0)
+                local floorRay = Workspace:Raycast(aheadPos, Vector3.new(0, -150, 0), rcParams)
+                
+                if floorRay then
+                    local roadY = floorRay.Position.Y
+                    local safeY = roadY + 8
+                    if myPos.Y < safeY then
+                        -- Gently push the car above the terrain
+                        local pushUp = (safeY - myPos.Y) * 5
+                        desiredVelY = math.max(desiredVelY, pushUp)
+                    end
                 end
             end
 
-            root.AssemblyLinearVelocity = desiredVel
+            -- Apply calculated perfection
+            root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
             SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
@@ -590,7 +617,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V26"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V27"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -999,7 +1026,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Direct Homing V26"
+arSub.Text   = "City Highway Race  ·  Anti-Gravity V27"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1148,11 +1175,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V26")
-InfoRow(TabMisc, "🔧  Pure Direct Center Homing Engine")
-InfoRow(TabMisc, "🎚️  Removed altitude tracking cushions entirely")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V27")
+InfoRow(TabMisc, "🔧  Anti-Gravity Cruise Homing Engine")
+InfoRow(TabMisc, "🎚️  Prevents void drops & long-distance sagging")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Locks strictly to checkpoint center.")
+InfoRow(TabMisc, "📋  Changelog: Fixed unloaded checkpoint voids.")
 
 -- Open Race tab by default
 do
@@ -1331,5 +1358,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J26] Midnight Chasers — V26 Pure Direct Homing Ready")
-print("[J26] The vehicle will now fly strict 3D paths directly through the center of every gate.")
+print("[J27] Midnight Chasers — V27 Anti-Gravity Engine Ready")
+print("[J27] Hover-Freeze enabled to prevent void drops while checkpoints load.")
