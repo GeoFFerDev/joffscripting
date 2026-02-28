@@ -1428,7 +1428,19 @@ SetProg(100, "Ready!", 5)
 task.wait(0.5)
 
 loadAnimConn:Disconnect()
-cam.CameraType = prevCamType
+
+-- Stop any in-flight camera CFrame tween (SetProg fires one at 100% that's
+-- still running here). Snap the camera to its current position so the tween
+-- has nothing left to do, then release control.
+pcall(function() TweenService:Create(cam, TweenInfo.new(0), {CFrame=cam.CFrame}):Play() end)
+task.wait()   -- one frame so the snap tween completes
+
+-- Force Custom (follow-player) camera type regardless of what prevCamType was.
+-- On mobile prevCamType is often already Scriptable (custom game camera),
+-- restoring it would keep the camera frozen. Custom always re-attaches properly.
+cam.CameraType = Enum.CameraType.Custom
+cam.CameraSubject = nil  -- let the engine re-pick the humanoid root
+task.wait()   -- one frame for the engine to re-attach the camera subject
 
 TweenService:Create(bg, TweenInfo.new(0.55,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
     {BackgroundTransparency=1}):Play()
