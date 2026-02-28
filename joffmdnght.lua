@@ -1,15 +1,15 @@
 --[[
-  JOSEPEDOV V29 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Smooth Finish Engine
+  JOSEPEDOV V31 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Auto-Queue & Client Mods
 
   ══════════════════════════════════════════════════════════════
-  V29 FIX — SMOOTH FINISH & FULL-SPEED COASTING
+  V31 FEATURE — TOKYO DRIFT MODE
   ══════════════════════════════════════════════════════════════
-  - Fixed a critical bug where the scanner ignored non-numeric 
-    checkpoints (like "Finish"), causing the script to get stuck.
-  - Coasting mode no longer drops the car's speed to 150. It now
-    maintains your exact AutoRace speed for a 100% smooth flight 
-    even when map chunks are loading.
+  - Added "Drift Mode" to the Car Tab.
+  - Dynamically detects Front vs Rear wheels and applies an
+    asymmetrical low-friction tune (rear is extra slippery, 
+    front retains steering grip) to allow continuous sliding.
+  - UI now intelligently toggles Grip/Drift mutually exclusive.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -79,7 +79,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V29  ·  SMOOTH FINISH EDITION"
+subLbl.Text   = "JOSEPEDOV V31  ·  TOKYO DRIFT EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -210,6 +210,8 @@ local Config = {
     MaxSpeed       = 320,
     AutoRaceSpeed  = 350,
     Deadzone       = 0.1,
+    TireGrip       = false,
+    DriftMode      = false, -- New V31 feature
 }
 local AR_SPEED_CAP = 600
 
@@ -227,8 +229,42 @@ local disabledCar    = nil
 local AR_STATE       = "IDLE"
 local raceThread     = nil
 local raceOwnsStatus = false
+local lastCarProcessed = nil
 
 local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
+
+-- ─────────────────────────────────────────────────────────────
+--  CAR PHYSICS MODIFICATION ENGINE (V31)
+-- ─────────────────────────────────────────────────────────────
+local function ApplyCarMods(car)
+    if not car then return end
+    local wheels = car:FindFirstChild("Wheels")
+    if not wheels then return end
+    
+    for _, w in ipairs(wheels:GetDescendants()) do
+        if w:IsA("BasePart") then
+            if Config.TireGrip then
+                -- MAX GRIP: High friction and weight overrides the road
+                w.CustomPhysicalProperties = PhysicalProperties.new(20, 1.5, 0, 100, 100)
+                
+            elseif Config.DriftMode then
+                -- DRIFT TUNE: Asymmetrical friction setup
+                local n = w.Name:upper()
+                if n == "RL" or n == "RR" or string.find(n, "REAR") then
+                    -- Rear wheels: extremely slippery so the tail kicks out
+                    w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.05, 0, 100, 100)
+                else
+                    -- Front wheels: mild slip but retains enough friction to steer
+                    w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.3, 0, 100, 100)
+                end
+                
+            else
+                -- DEFAULT: Reset to normal standard friction
+                w.CustomPhysicalProperties = PhysicalProperties.new(1, 0.7, 0.3, 1, 1)
+            end
+        end
+    end
+end
 
 -- ─────────────────────────────────────────────────────────────
 --  COLLISION HELPERS
@@ -300,14 +336,12 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
         if child:IsA("BasePart") then
             local idx = tonumber(child.Name)
             if idx then
-                -- It's a standard numbered checkpoint
                 if not (clearedSet and clearedSet[idx]) and idx ~= skipIdx then
                     if idx < bestIdx then
                         best, bestIdx = child, idx
                     end
                 end
             else
-                -- V29 FIX: Detects the final "Finish" or unnumbered checkpoint
                 if not (clearedSet and clearedSet[child.Name]) and child.Name ~= skipIdx then
                     fallbackPart = child
                 end
@@ -315,19 +349,12 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
         end
     end
     
-    -- Always prioritize numbers first. If no numbers left, grab the finish line!
-    if best then 
-        return best, bestIdx 
-    end
-    
-    if fallbackPart then
-        return fallbackPart, fallbackPart.Name
-    end
-    
+    if best then return best, bestIdx end
+    if fallbackPart then return fallbackPart, fallbackPart.Name end
     return nil, nil
 end
 
-SetProg(60, "Calibrating Smooth Finish engine...", 4)
+SetProg(60, "Calibrating Auto-Queue engine...", 4)
 task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
@@ -342,7 +369,7 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  THE SMOOTH FINISH ENGINE (V29)
+--  THE AUTO-QUEUE ENGINE
 -- ─────────────────────────────────────────────────────────────
 local GATE_INSIDE  = 0.10 
 local TRIGGER_DIST = 25   
@@ -360,7 +387,6 @@ local function DoRaceLoop(uuidFolder)
 
     while Config.AutoRace and AR_STATE == "RACING" do
         
-        -- Get the user's live speed
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
         local clearDist = math.max(28, arSpeed * 0.07)
 
@@ -368,16 +394,18 @@ local function DoRaceLoop(uuidFolder)
         local waitForCP = tick() + 45 
         
         repeat
+            if not uuidFolder or not uuidFolder:IsDescendantOf(Workspace) then break end
+            local stateV = uuidFolder:FindFirstChild("State")
+            if stateV and stateV.Value ~= "Racing" then break end
+
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
             
             if not gatePart then 
-                -- ── FULL-SPEED COASTING (V29 FIX) ──
                 if currentCar then
                     local tempRoot = currentCar.PrimaryPart or currentSeat
                     if tempRoot then
                         if lastDirXZ then
                             SetStatus("📡 Map Loading... Coasting ahead", 255, 180, 50)
-                            -- Uses exact arSpeed instead of slowing down to 150
                             tempRoot.AssemblyLinearVelocity = Vector3.new(lastDirXZ.X * arSpeed, 0, lastDirXZ.Z * arSpeed)
                         else
                             SetStatus("⏳ Waiting for first checkpoint...", 255, 152, 0)
@@ -392,10 +420,11 @@ local function DoRaceLoop(uuidFolder)
               or not Config.AutoRace or AR_STATE ~= "RACING"
 
         if not gatePart then
-            SetStatus("🏁 Race complete or timed out! Returning to queue...", 0, 220, 130)
-            task.wait(2)
+            SetStatus("🏁 Race Finished! Returning to queue...", 0, 220, 130)
+            task.wait(1.5) 
             RestoreCollisions()
             raceOwnsStatus = false
+            
             local ch2 = player.Character
             if ch2 and ch2:FindFirstChild("Humanoid") then
                 local seat2 = ch2.Humanoid.SeatPart
@@ -403,13 +432,17 @@ local function DoRaceLoop(uuidFolder)
                     local car2  = seat2.Parent
                     local root2 = car2.PrimaryPart or seat2
                     if root2 then
-                        task.wait(0.1)
                         car2:PivotTo(CFrame.new(QUEUE_POS))
+                        task.wait(0.1)
                         root2.AssemblyLinearVelocity  = Vector3.zero
                         root2.AssemblyAngularVelocity = Vector3.zero
-                        SetStatus("⏎ Back at queue — drive in to race again!", 0, 190, 255)
+                        SetStatus("⏎ Back at queue — waiting for start!", 0, 190, 255)
                     end
                 end
+            end
+            
+            if Config.AutoRace then
+                AR_STATE = "QUEUING"
             end
             break
         end
@@ -425,10 +458,8 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- Lock the target to the middle-center of the gate volume
         local gateTargetY = gatePart.Position.Y + (gatePart.Size.Y * GATE_INSIDE)
         local targetPos = Vector3.new(gatePart.Position.X, gateTargetY, gatePart.Position.Z)
-
         local flyLimit  = tick() + 30
 
         while tick() < flyLimit do
@@ -449,12 +480,10 @@ local function DoRaceLoop(uuidFolder)
             local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
             local distXZ = (targetXZ - myXZ).Magnitude
 
-            -- Update last direction for Coasting Mode 
             if distXZ > 15 then
                 lastDirXZ = (targetXZ - myXZ).Unit
             end
 
-            -- ── SMOOTH PASS-THROUGH TRIGGER ──
             if distXZ <= TRIGGER_DIST then
                 pcall(function()
                     if firetouchinterest then
@@ -472,17 +501,14 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── PURE 3D HOMING VECTOR ──
             local dir3D = (targetPos - myPos).Unit
             local desiredVelX = dir3D.X * arSpeed
             local desiredVelY = dir3D.Y * arSpeed
             local desiredVelZ = dir3D.Z * arSpeed
 
-            -- ── ANTI-GRAVITY DRIFT CORRECTION ──
             local yErr = targetPos.Y - myPos.Y
             desiredVelY = desiredVelY + (yErr * 1.5)
 
-            -- ── CRUISE CONTROL (Long Distance Only) ──
             if distXZ > 150 then
                 local dirXZ = (targetXZ - myXZ).Unit
                 local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 50, 0)
@@ -492,7 +518,6 @@ local function DoRaceLoop(uuidFolder)
                     local roadY = floorRay.Position.Y
                     local safeY = roadY + 8
                     if myPos.Y < safeY then
-                        -- Gently push the car above the terrain
                         local pushUp = (safeY - myPos.Y) * 5
                         desiredVelY = math.max(desiredVelY, pushUp)
                     end
@@ -507,7 +532,6 @@ local function DoRaceLoop(uuidFolder)
             task.wait()
         end
 
-        -- ⑤ Cleanup
         if cpConn then pcall(function() cpConn:Disconnect() end) end
         if not Config.AutoRace or AR_STATE ~= "RACING" then break end
 
@@ -645,7 +669,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V29"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V31"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -784,7 +808,6 @@ end
 
 -- ── UI Components ──────────────────────────────────────────────
 
--- Section label
 local function Section(parent, text)
     local lbl = Instance.new("TextLabel", parent)
     lbl.Size   = UDim2.new(0.98,0,0,18)
@@ -796,7 +819,6 @@ local function Section(parent, text)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
 end
 
--- Toggle row (Fluent pill style)
 local function FluentToggle(parent, title, desc, callback)
     local state = false
     local btn = Instance.new("TextButton", parent)
@@ -860,7 +882,6 @@ local function FluentToggle(parent, title, desc, callback)
     return setV
 end
 
--- Drag slider (full-width track, snap to 10)
 local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV, setV)
     local row = Instance.new("Frame", parent)
     row.Size  = UDim2.new(0.98,0,0,62)
@@ -905,7 +926,6 @@ local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV
     knob.BorderSizePixel = 0
     Instance.new("UICorner",knob).CornerRadius = UDim.new(0,7)
 
-    -- Sweet-spot tick
     if sweetspot then
         local sp = (sweetspot-minV)/(maxV-minV)
         local stk = Instance.new("Frame",track)
@@ -982,7 +1002,6 @@ local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV
     end)
 end
 
--- Simple +/- stepper (for tuning values)
 local function FluentStepper(parent, label, fmt, getV, decV, incV)
     local row = Instance.new("Frame",parent)
     row.Size  = UDim2.new(0.98,0,0,38)
@@ -1030,7 +1049,6 @@ local TabMisc  = CreateTab("Misc",  "⚙️")
 -- ── RACE TAB ──────────────────────────────────────────────────
 Section(TabRace, "  AUTO RACE")
 
--- AutoRace hero row (big clickable row with status dot)
 local arRow = Instance.new("TextButton", TabRace)
 arRow.Size  = UDim2.new(0.98,0,0,52)
 arRow.BackgroundColor3 = Theme.Button
@@ -1054,7 +1072,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Smooth Finish V29"
+arSub.Text   = "City Highway Race  ·  Auto-Queue V31"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1066,7 +1084,6 @@ arDot.Position = UDim2.new(1,-18,0.5,-5)
 arDot.BackgroundColor3 = Theme.SubText
 Instance.new("UICorner",arDot).CornerRadius = UDim.new(0,5)
 
--- Status label (below hero row)
 local statRow = Instance.new("Frame", TabRace)
 statRow.Size  = UDim2.new(0.98,0,0,32)
 statRow.BackgroundColor3 = Color3.fromRGB(20,20,24)
@@ -1084,14 +1101,13 @@ statLbl.Font  = Enum.Font.Code
 statLbl.TextSize = 10
 statLbl.TextWrapped = true
 statLbl.TextXAlignment = Enum.TextXAlignment.Left
-_statusLbl = statLbl   -- wire SetStatus here
+_statusLbl = statLbl
 
 Section(TabRace, "  FLIGHT SPEED")
 FluentSlider(TabRace, "AutoRace Speed", 50, AR_SPEED_CAP, Config.AutoRaceSpeed, 500,
     function() return Config.AutoRaceSpeed end,
     function(v) Config.AutoRaceSpeed = math.clamp(v, 50, AR_SPEED_CAP) end)
 
--- AutoRace visual state updater
 local function UpdateARVisual()
     local map = {
         IDLE     = {txt="AutoRace: OFF",      col=Theme.SubText, bg=Theme.Button},
@@ -1154,20 +1170,48 @@ arRow.MouseButton1Click:Connect(function()
 end)
 
 -- ── CAR TAB ───────────────────────────────────────────────────
-Section(TabCar, "  DRIVING")
-FluentToggle(TabCar, "⚡ Speed Hack", "Override car top speed",
-    function(v) Config.SpeedHack=v; return v end)
+Section(TabCar, "  PHYSICS MODS (FREE)")
 
-Section(TabCar, "  NITRO")
+-- Pre-declare our toggle references so they can talk to each other
+local setGripToggle
+local setDriftToggle
+
+setGripToggle = FluentToggle(TabCar, "🛞 Pro Racing Tires (Grip Hack)", "Overrides physical wheel friction for max traction",
+    function(v) 
+        Config.TireGrip = v
+        -- Turn off Drift mode if Grip mode is turned on
+        if v and setDriftToggle then 
+            Config.DriftMode = false
+            setDriftToggle(false)
+        end
+        ApplyCarMods(currentCar)
+        return v 
+    end)
+
+setDriftToggle = FluentToggle(TabCar, "💨 Tokyo Drift Mode", "Lowers rear wheel friction for continuous smooth sliding",
+    function(v) 
+        Config.DriftMode = v
+        -- Turn off Grip mode if Drift mode is turned on
+        if v and setGripToggle then 
+            Config.TireGrip = false
+            setGripToggle(false)
+        end
+        ApplyCarMods(currentCar)
+        return v 
+    end)
+
+Section(TabCar, "  ENGINE MODS (FREE)")
+FluentToggle(TabCar, "⚡ Stage 3 Engine Override", "Overrides A-Chassis with max speed & acceleration",
+    function(v) Config.SpeedHack=v; return v end)
 FluentToggle(TabCar, "🔥 Infinite Nitro", "Keeps CurrentBoost at MaxBoost",
     function(v) Config.InfNitro=v; return v end)
 
-Section(TabCar, "  TUNING")
-FluentStepper(TabCar, "Top Speed (SpeedHack)", "%d st/s",
+Section(TabCar, "  ENGINE TUNING")
+FluentStepper(TabCar, "Top Speed Override", "%d st/s",
     function() return Config.MaxSpeed end,
     function() Config.MaxSpeed=math.max(50,Config.MaxSpeed-50) end,
     function() Config.MaxSpeed=Config.MaxSpeed+50 end)
-FluentStepper(TabCar, "Acceleration", "%.1f",
+FluentStepper(TabCar, "Acceleration Power", "%.1f",
     function() return Config.Acceleration end,
     function() Config.Acceleration=math.max(0.5,Config.Acceleration-0.5) end,
     function() Config.Acceleration=Config.Acceleration+0.5 end)
@@ -1203,11 +1247,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V29")
-InfoRow(TabMisc, "🔧  Smooth Finish & Full-Speed Coasting")
-InfoRow(TabMisc, "🎚️  Car now recognizes Finish lines correctly")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V31")
+InfoRow(TabMisc, "🔧  Auto-Queue Tracking")
+InfoRow(TabMisc, "🎚️  Drift Mode & Client-Side Free Mods")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Zero deceleration during coasting.")
+InfoRow(TabMisc, "📋  Changelog: Added Tokyo Drift Mode.")
 
 -- Open Race tab by default
 do
@@ -1227,7 +1271,7 @@ SetProg(95, "Finalising...", 5)
 task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
---  HEARTBEAT — state machine + SpeedHack + InfNitro
+--  HEARTBEAT — state machine + SpeedHack + InfNitro + Mods
 -- ═══════════════════════════════════════════════════════════════
 RunService.Heartbeat:Connect(function()
 
@@ -1246,6 +1290,12 @@ RunService.Heartbeat:Connect(function()
         currentCar = nil; return
     end
     currentCar = currentSeat.Parent
+    
+    -- Apply Tire Grip or Drift Tune if we entered a new car
+    if currentCar ~= lastCarProcessed then
+        ApplyCarMods(currentCar)
+        lastCarProcessed = currentCar
+    end
 
     -- A-Chassis values
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
@@ -1333,7 +1383,7 @@ RunService.Heartbeat:Connect(function()
         SetStatus("AutoRace OFF")
     end
 
-    -- SpeedHack
+    -- SpeedHack (Stage 3 Engine Override)
     local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
     if Config.SpeedHack then
         local rp = RaycastParams.new()
@@ -1386,5 +1436,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J29] Midnight Chasers — V29 Smooth Finish Engine Ready")
-print("[J29] Non-numeric checkpoints are now fully supported.")
+print("[J31] Midnight Chasers — V31 Tokyo Drift Edition Ready")
+print("[J31] Drift Mode logic active: Rear wheel friction reduced for perfect sliding.")
