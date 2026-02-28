@@ -1,17 +1,16 @@
 --[[
-  JOSEPEDOV V27 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Anti-Gravity Homing Engine
+  JOSEPEDOV V28 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Map Discovery Engine
 
   ══════════════════════════════════════════════════════════════
-  V27 FIX — HOVER-FREEZE & CRUISE CONTROL
+  V28 FIX — MAP DISCOVERY COASTING (STREAMING ENABLED)
   ══════════════════════════════════════════════════════════════
-  - Fixed the void drop: The car now actively forces 0 velocity 
-    every frame while waiting for the next checkpoint to load.
-  - Fixed long-distance sagging: Applied a mathematical anti-gravity 
-    counteract to the Y-axis so the car never drifts downward.
-  - Added "Cruise Control": If the checkpoint is >150 studs away, 
-    the car looks ahead and glides over hills. When <150 studs, it 
-    disables terrain tracking and dives perfectly into the center.
+  - Fixed race freezing at CP 38 due to unloaded map chunks.
+  - Replaced the "Hover-Freeze" with "Blind Coasting Mode". If a 
+    checkpoint takes too long to load due to slow internet, the car 
+    will maintain altitude and coast blindly forward along its last 
+    known trajectory to force the Roblox engine to render the map.
+  - Increased Checkpoint Timeout from 15s to 45s.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -81,7 +80,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V27  ·  ANTI-GRAVITY EDITION"
+subLbl.Text   = "JOSEPEDOV V28  ·  MAP DISCOVERY EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -308,7 +307,7 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
     return best, bestIdx
 end
 
-SetProg(60, "Calibrating Anti-Gravity engine...", 4)
+SetProg(60, "Calibrating Map Discovery engine...", 4)
 task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
@@ -323,7 +322,7 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  THE ANTI-GRAVITY ENGINE (V27)
+--  THE MAP DISCOVERY ENGINE (V28)
 -- ─────────────────────────────────────────────────────────────
 local GATE_INSIDE  = 0.10 
 local TRIGGER_DIST = 25   
@@ -334,24 +333,34 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
+    local lastDirXZ  = nil -- Stores trajectory for blind coasting
 
     local rcParams = RaycastParams.new()
     rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
-        -- ① Find next CP gate (With Anti-Void Hover Freeze)
         local gatePart, cpIdx
-        local waitForCP = tick() + 15
+        local waitForCP = tick() + 45 -- EXTENDED TIMEOUT (45s) for slow map loading
         repeat
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
+            
             if not gatePart then 
-                -- CRITICAL FIX: If the checkpoint is loading, freeze the car perfectly.
-                -- This prevents the car from free-falling into the void.
+                -- ── MAP DISCOVERY COASTING (V28 FIX) ──
+                -- If internet is slow, the checkpoint won't be in Workspace.
+                -- We coast blindly forward along our last trajectory to force 
+                -- the Roblox engine to naturally load the next chunk of map.
                 if currentCar then
                     local tempRoot = currentCar.PrimaryPart or currentSeat
                     if tempRoot then
-                        tempRoot.AssemblyLinearVelocity = Vector3.zero
+                        if lastDirXZ then
+                            SetStatus("📡 Map Loading... Coasting to render next chunk", 255, 180, 50)
+                            -- 150 speed horizontally, exactly 0 vertically to hold altitude perfectly
+                            tempRoot.AssemblyLinearVelocity = Vector3.new(lastDirXZ.X * 150, 0, lastDirXZ.Z * 150)
+                        else
+                            SetStatus("⏳ Waiting for first checkpoint...", 255, 152, 0)
+                            tempRoot.AssemblyLinearVelocity = Vector3.zero
+                        end
                         tempRoot.AssemblyAngularVelocity = Vector3.zero
                     end
                 end
@@ -361,7 +370,7 @@ local function DoRaceLoop(uuidFolder)
               or not Config.AutoRace or AR_STATE ~= "RACING"
 
         if not gatePart then
-            SetStatus("🏁 Race complete! Returning to queue...", 0, 220, 130)
+            SetStatus("🏁 Race complete or timed out! Returning to queue...", 0, 220, 130)
             task.wait(2)
             RestoreCollisions()
             raceOwnsStatus = false
@@ -394,7 +403,7 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- Strictly lock the target to the middle-center of the gate volume
+        -- Lock the target to the middle-center of the gate volume
         local gateTargetY = gatePart.Position.Y + (gatePart.Size.Y * GATE_INSIDE)
         local targetPos = Vector3.new(gatePart.Position.X, gateTargetY, gatePart.Position.Z)
 
@@ -419,6 +428,11 @@ local function DoRaceLoop(uuidFolder)
             local myXZ  = Vector3.new(myPos.X, 0, myPos.Z)
             local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
             local distXZ = (targetXZ - myXZ).Magnitude
+
+            -- Update last direction for Coasting Mode (stop updating if too close to avoid snapping)
+            if distXZ > 15 then
+                lastDirXZ = (targetXZ - myXZ).Unit
+            end
 
             -- ── SMOOTH PASS-THROUGH TRIGGER ──
             if distXZ <= TRIGGER_DIST then
@@ -445,15 +459,10 @@ local function DoRaceLoop(uuidFolder)
             local desiredVelZ = dir3D.Z * arSpeed
 
             -- ── ANTI-GRAVITY DRIFT CORRECTION ──
-            -- When a checkpoint is very far away, gravity drags the car downward between frames.
-            -- We mathematically force the Y-axis to stay aligned with the target line.
             local yErr = targetPos.Y - myPos.Y
             desiredVelY = desiredVelY + (yErr * 1.5)
 
             -- ── CRUISE CONTROL (Long Distance Only) ──
-            -- If the checkpoint is >150 studs away, we look 40 studs ahead.
-            -- If the terrain gets within 8 studs, we lift the car to avoid clipping.
-            -- When we get close (<150 studs), this disables so we can accurately dive into the center.
             if distXZ > 150 then
                 local dirXZ = (targetXZ - myXZ).Unit
                 local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 50, 0)
@@ -470,7 +479,6 @@ local function DoRaceLoop(uuidFolder)
                 end
             end
 
-            -- Apply calculated perfection
             root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
@@ -617,7 +625,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V27"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V28"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1026,7 +1034,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Anti-Gravity V27"
+arSub.Text   = "City Highway Race  ·  Map Discovery V28"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1175,9 +1183,9 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V27")
-InfoRow(TabMisc, "🔧  Anti-Gravity Cruise Homing Engine")
-InfoRow(TabMisc, "🎚️  Prevents void drops & long-distance sagging")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V28")
+InfoRow(TabMisc, "🔧  Map Discovery Coasting Engine")
+InfoRow(TabMisc, "🎚️  Forces missing chunks to render naturally")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: Fixed unloaded checkpoint voids.")
 
@@ -1358,5 +1366,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J27] Midnight Chasers — V27 Anti-Gravity Engine Ready")
-print("[J27] Hover-Freeze enabled to prevent void drops while checkpoints load.")
+print("[J28] Midnight Chasers — V28 Map Discovery Coasting Engine Ready")
+print("[J28] Unloaded map chunks will now naturally force-render as the car coasts forward.")
