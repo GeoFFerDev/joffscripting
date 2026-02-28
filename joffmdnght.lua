@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V41 — MIDNIGHT CHASERS
+  JOSEPEDOV V42 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -16,7 +16,8 @@
 
   Progress phases:
     5  %  — Script init
-    5–55%  — ContentProvider asset preload (real progress)
+    5–55%  — ContentProvider:PreloadAsync (CDN asset download)
+   55–60%  — RequestStreamAroundAsync (workspace spatial streaming)
     60  %  — Config & world setup
     70  %  — Race engine calibration
     80  %  — UI build
@@ -102,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V41  ·  MOTO EDITION"
+subLbl.Text   = "JOSEPEDOV V42  ·  MOTO + STREAM EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -463,6 +464,49 @@ do
 
     SetProg(55, string.format("Assets ready!  %d preloaded", loaded), 1)
     task.wait(0.2)
+
+    -- ── WORKSPACE SPATIAL STREAMING (V42) ──────────────────────
+    -- ContentProvider:PreloadAsync downloads CDN binary data but
+    -- does NOT stream workspace Parts/Models (StreamingEnabled).
+    -- player:RequestStreamAroundAsync(pos) asks the server to
+    -- send workspace content near each position to this client.
+    -- We request 16 positions covering the full race route so
+    -- the map is pre-streamed before gameplay starts.
+    -- Each call yields until the server confirms the area is sent.
+    local STREAM_POSITIONS = {
+        -- Race route: extracted from place XML (X:2464-3762)
+        Vector3.new(2464,  5, 583),
+        Vector3.new(2575,  5, 469),
+        Vector3.new(2663,  5, 389),
+        Vector3.new(2771,  5, 501),
+        Vector3.new(2852,  5, 566),
+        Vector3.new(2900,  5, 700),   -- race start area
+        Vector3.new(2975,  5, 674),
+        Vector3.new(3087,  5, 636),
+        Vector3.new(3190,  5, 637),
+        Vector3.new(3260,  12,1016),  -- queue position
+        Vector3.new(3276,  5, 847),
+        Vector3.new(3326,  5, 988),
+        Vector3.new(3414,  5, 742),
+        Vector3.new(3474,  5, 715),
+        Vector3.new(3485,  5, 622),
+        Vector3.new(3599,  5, 648),
+    }
+    local streamTotal = #STREAM_POSITIONS
+    for si, spos in ipairs(STREAM_POSITIONS) do
+        local spct = 55 + (si / streamTotal) * 5   -- drives bar 55% → 60%
+        barTxt.Text = string.format(
+            "  %.0f%%  —  Streaming map area %d/%d...", spct, si, streamTotal)
+        TweenService:Create(barFill,
+            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {Size = UDim2.new(spct/100, 0, 1, 0)}):Play()
+        pcall(function()
+            player:RequestStreamAroundAsync(spos, 10)  -- 10s timeout
+        end)
+    end
+
+    SetProg(60, "Map streaming complete!", 1)
+    task.wait(0.15)
 end
 
 -- ─────────────────────────────────────────────────────────────
@@ -1023,7 +1067,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V41"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V42"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1680,7 +1724,7 @@ FluentStepper(TabCar, "Boost Power", "%.1f",
 Section(TabCar, "  MOTORCYCLE")
 
 FluentToggle(TabCar, "🏍️ Moto Speed Boost",
-    "XZ-plane boost for bikes — no flipping on lean",
+    "Horizontal boost (XZ-only) — works on bikes & cars, no flip",
     function(v)
         Config.MotoSpeedHack = v
         return v
@@ -1940,7 +1984,7 @@ RunService.Heartbeat:Connect(function()
                 SetStatus(isRev and "Reversing..." or "Status: Idle")
             end
         end
-    elseif Config.MotoSpeedHack and isMoto then
+    elseif Config.MotoSpeedHack then
         -- Status is set inside the moto block below; skip generic idle
     else
         SetStatus("Status: Idle")
@@ -1950,7 +1994,7 @@ RunService.Heartbeat:Connect(function()
     -- Separate from the car SpeedHack. Boosts along the XZ plane
     -- only — never along the full 3D LookVector which on a leaning
     -- bike points partly downward and would flip the motorcycle.
-    if Config.MotoSpeedHack and isMoto then
+    if Config.MotoSpeedHack then
         if root and root:IsA("BasePart") then
             -- Project look direction onto XZ (horizontal) plane
             local lv   = root.CFrame.LookVector
@@ -2023,7 +2067,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J41] Midnight Chasers — V41 Moto Edition Ready")
-print("[J41] Developed by josepedov")
-print("[J41] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader")
+print("[J42] Midnight Chasers — V42 Moto+Stream Edition Ready")
+print("[J42] Developed by josepedov")
+print("[J42] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
