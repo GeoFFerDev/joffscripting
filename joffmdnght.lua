@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V22 — MIDNIGHT CHASERS
+  JOSEPEDOV V22c — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Stable Flight Engine
 
   ══════════════════════════════════════════════════════════════
@@ -107,7 +107,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V22  ·  FLUENT EDITION"
+subLbl.Text   = "JOSEPEDOV V22c  ·  FLUENT EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -373,10 +373,10 @@ end
 
 local GATE_HOVER  = 3     -- studs above gate top arch
 local CEIL_GAP    = 8     -- push down if ceiling within this many studs
-local FLOOR_GAP   = 6     -- push up if solid floor within this many studs
-local CLEAR_DIST  = 28    -- XZ proximity to count as "cleared" (half gate Z≈60)
-local Y_CLAMP_DN  = 5     -- max studs below lastSafeY allowed per frame
-local Y_CLAMP_UP  = 14    -- max studs above lastSafeY allowed per frame
+local FLOOR_GAP   = 6     -- push up if CanCollide=true floor within this many studs
+local MAX_ABOVE   = 6     -- hard cap: car may never be more than this many studs above gateTopY
+--   CLEAR_DIST is computed per-frame based on speed (see fly loop)
+--   Y_CLAMP_UP / blendT / forward probe all removed in V22c (they caused upward drift)
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -438,19 +438,41 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- ③ Compute correct gate-top targetY for this CP
-        --    Gate centers are underground. The top of the gate = center + size/2.
-        --    GATE_HOVER keeps the car slightly above the arch top.
+        -- ③ Gate-top target for this CP (authoritative, used every frame)
+        --    Gate centers are underground (CP28 centerY=-6.49, CP29 centerY=-4.49).
+        --    Top = center + sizeY/2.  GATE_HOVER puts car 3 studs above the arch.
         local gateTopY = gatePart.Position.Y + gatePart.Size.Y * 0.5 + GATE_HOVER
 
-        -- Clamp the target to [lastSafeY - Y_CLAMP_DN, lastSafeY + Y_CLAMP_UP]
-        -- This prevents a newly loaded gate with unusual geometry from jerking the
-        -- car immediately underground or into the sky.
-        local clampedGateTopY = math.clamp(gateTopY, lastSafeY - Y_CLAMP_DN, lastSafeY + Y_CLAMP_UP)
-
         -- ④ Fly toward the gate
-        local flyLimit = tick() + 30
-        local arSpeed  = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        --
+        --  V22c Y STABILITY FIXES (removed from V22/V21):
+        --
+        --  REMOVED: blendT blend from lastSafeY
+        --    Old: targetY = lastSafeY + (clampedGateTopY-lastSafeY)*blendT
+        --    Why bad: when distXZ>200 targetY=lastSafeY which could be stale/elevated.
+        --    The car spent most of each leg targeting a WRONG height.
+        --    Fix: always target gateTopY directly — it's always correct.
+        --
+        --  REMOVED: forward probe math.max
+        --    Old: targetY = math.max(targetY, fwdHit.Y + GATE_HOVER)
+        --    Why bad: guardrails, bridge ramps, overpass edges 25 studs ahead all
+        --    pushed targetY UP with no downward counterpart. After 10 CPs on a
+        --    highway full of guardrails the car was 30–60 studs too high.
+        --    Fix: no forward probe. gateTopY is the ground truth.
+        --
+        --  ADDED: MAX_ABOVE hard cap
+        --    Car may never fly more than MAX_ABOVE studs above gateTopY.
+        --    At high speed the PD controller might lag behind; this cap ensures
+        --    the car is dragged back down hard before it can accumulate altitude.
+        --
+        --  ADDED: speed-scaled CLEAR_DIST
+        --    At 600 st/s the car covers 10 studs/frame. CLEAR_DIST scales with
+        --    speed so the proximity zone is always wide enough to catch the gate.
+
+        local flyLimit  = tick() + 30
+        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        -- Scale proximity zone with speed: faster car needs bigger window
+        local clearDist = math.max(28, arSpeed * 0.07)
         prevYErr = 0
 
         while tick() < flyLimit do
@@ -466,28 +488,28 @@ local function DoRaceLoop(uuidFolder)
             local ch = player.Character
             rcParams.FilterDescendantsInstances = ch and {car, ch} or {car}
 
-            local myPos = root.Position
-
-            -- XZ targeting
+            local myPos  = root.Position
             local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
-            if distXZ <= CLEAR_DIST then
+            if distXZ <= clearDist then
                 cpCleared = true
                 break
             end
 
-            -- ── Y COMPUTATION ─────────────────────────────────────
-            -- Base: clamped gate-top target (safe against geometry surprises)
-            local targetY = clampedGateTopY
+            -- ── Y COMPUTATION ──────────────────────────────────────
+            -- Primary target: always the gate top (never blended away from it)
+            local targetY = gateTopY
 
-            -- Forward probe: read the gate top Y as the car gets closer
-            -- so it can smoothly adjust before arrival (not a harsh jump)
-            local blendT = 1 - math.clamp(distXZ / 200, 0, 1)
-            targetY = lastSafeY + (clampedGateTopY - lastSafeY) * blendT
+            -- Hard cap: if car is above gateTopY + MAX_ABOVE, clamp target DOWN
+            -- so the PD controller always has a downward signal when too high.
+            -- This prevents altitude accumulation at high speed.
+            if myPos.Y > gateTopY + MAX_ABOVE then
+                targetY = gateTopY  -- force full downward correction
+            end
 
-            -- Ceiling guard ↑ 20 studs
+            -- Ceiling guard ↑ 20 studs (bridge undersides etc.)
             local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 20, 0), rcParams)
             if ceilHit then
                 local gap = ceilHit.Position.Y - myPos.Y
@@ -496,47 +518,46 @@ local function DoRaceLoop(uuidFolder)
                 end
             end
 
-            -- Floor guard ↓ 40 studs (only solid CanCollide=true floors matter)
+            -- Floor guard ↓ 40 studs (CanCollide=true surfaces only — car+char filtered)
             local floorHit = Workspace:Raycast(myPos, Vector3.new(0, -40, 0), rcParams)
             if floorHit then
                 local floorTop = floorHit.Position.Y
-                local gap = myPos.Y - floorTop
-                if gap < FLOOR_GAP then
+                if myPos.Y - floorTop < FLOOR_GAP then
                     targetY = math.max(targetY, floorTop + FLOOR_GAP + 1)
                 end
             end
 
-            -- Forward probe ↗ (25 studs ahead in XZ direction, angled slightly down)
-            local fwdDir = (gateXZ - myXZ).Unit
-            local fwdHit = Workspace:Raycast(myPos,
-                Vector3.new(fwdDir.X*25, -3, fwdDir.Z*25), rcParams)
-            if fwdHit and math.abs(fwdHit.Position.Y - myPos.Y) < 20 then
-                -- Smooth pre-adjust toward what's ahead
-                targetY = math.max(targetY, fwdHit.Position.Y + GATE_HOVER)
-            end
-
-            -- PD controller
-            local yErr  = targetY - myPos.Y
-            local yDeriv= yErr - prevYErr
+            -- PD controller — asymmetric gains:
+            -- Downward correction is stronger (car tends to drift UP at speed).
+            local yErr   = targetY - myPos.Y
+            local yDeriv = yErr - prevYErr
             prevYErr = yErr
 
             local Kp, Kd, maxVY
-            if math.abs(yErr) > 10 then
-                Kp=7; Kd=2; maxVY=90
-            elseif math.abs(yErr) > 4 then
-                Kp=5; Kd=3; maxVY=45
+            if yErr < -8 then
+                -- Above target by >8: strong downward pull
+                Kp=10; Kd=2; maxVY=120
+            elseif yErr < -3 then
+                -- Above target 3-8: moderate down
+                Kp=7;  Kd=3; maxVY=60
+            elseif yErr > 10 then
+                -- Below target by >10: strong upward
+                Kp=8;  Kd=2; maxVY=90
+            elseif yErr > 3 then
+                -- Below target 3-10: moderate up
+                Kp=5;  Kd=3; maxVY=45
             else
-                Kp=3; Kd=4; maxVY=18
+                -- Within 3 studs: fine hold
+                Kp=3;  Kd=5; maxVY=15
             end
             local velY = math.clamp(yErr*Kp + yDeriv*Kd, -maxVY, maxVY)
 
-            -- XZ velocity
-            local dirXZ = fwdDir
+            local dirXZ = (gateXZ - myXZ).Unit
             root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X*arSpeed, velY, dirXZ.Z*arSpeed)
             root.AssemblyAngularVelocity = Vector3.zero
 
-            SetStatus(string.format("→ CP #%d   %.0f studs  Y%.1f→%.1f",
-                cpIdx, distXZ, myPos.Y, targetY), 0, 190, 255)
+            SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
+                cpIdx, distXZ, myPos.Y, gateTopY), 0, 190, 255)
             task.wait()
         end
 
@@ -546,9 +567,8 @@ local function DoRaceLoop(uuidFolder)
 
         if cpCleared then
             clearedSet[cpIdx] = true
-            -- Update lastSafeY to this gate's actual top — now we know it's good
-            lastSafeY = clampedGateTopY
-            SetStatus(string.format("✓ CP #%d cleared  safeY=%.1f", cpIdx, lastSafeY), 0, 230, 100)
+            lastSafeY = gateTopY  -- record confirmed safe height for this CP
+            SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTopY), 0, 230, 100)
             task.wait(0.2)
         else
             SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
@@ -1422,6 +1442,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J22] Midnight Chasers — V22 stable flight + Fluent UI ready")
-print("[J22] targetY = gate.Y + gate.Size.Y*0.5 + 3  (gate-top formula)")
-print("[J22] PD controller · 3-ray sensor · Y-memory · Fluent green theme")
+print("[J22c] Midnight Chasers — V22c altitude fix + Fluent UI ready")
+print("[J22c] targetY = gateTopY always · no blendT · no fwdProbe · MAX_ABOVE=6")
+print("[J22c] speed-scaled clearDist · asymmetric PD (down>up) · V22c")
