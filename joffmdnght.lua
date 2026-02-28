@@ -1,17 +1,17 @@
 --[[
-  JOSEPEDOV V24b — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Dynamic Terrain-Locked Engine
+  JOSEPEDOV V24c — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | 3D Homing Engine
 
   ══════════════════════════════════════════════════════════════
-  V24b FIX — DYNAMIC TERRAIN & UNDERGROUND TRAP PREVENTION
+  V24c FIX — 3D HOMING & DOWNHILL DIVING
   ══════════════════════════════════════════════════════════════
-  - Fixed issue where sudden terrain elevation changes caused the 
-    car to clip underground and fail to detect the road above it.
-  - Floor raycast now originates 50 studs ABOVE the car, guaranteeing
-    it always finds the road surface even if the car sinks.
-  - Added Forward Anticipation Raycast (40 studs ahead) to predict
-    and smoothly adapt to steep hills before the car reaches them.
-  - Increased upward velocity limit for faster hill climbing.
+  - Removed independent 2D XZ steering. The car now uses a true 3D 
+    homing vector to the gate target.
+  - If a gate is downhill, the car will actively dive at full speed 
+    towards it, perfectly tracking elevation drops without overshooting.
+  - Terrain raycasts now act as a "Repulsion Cushion" rather than a 
+    strict altitude lock. The car is free to dive aggressively unless 
+    it is within 6 studs of crashing into the terrain.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -81,7 +81,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V24b  ·  DYNAMIC TERRAIN EDITION"
+subLbl.Text   = "JOSEPEDOV V24c  ·  3D HOMING EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -308,11 +308,11 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
     return best, bestIdx
 end
 
-SetProg(60, "Calibrating flight engine...", 4)
+SetProg(60, "Calibrating 3D homing engine...", 4)
 task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
---  STATUS (wired to UI label after UI creation)
+--  STATUS
 -- ─────────────────────────────────────────────────────────────
 local _statusLbl = nil
 local function SetStatus(text, r, g, b)
@@ -323,12 +323,11 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  DYNAMIC TERRAIN ENGINE (V24b)
+--  3D HOMING ENGINE (V24c)
 -- ─────────────────────────────────────────────────────────────
-local ROAD_HOVER  = 4     -- studs above actual road surface
-local GATE_INSIDE = 0.30  -- fraction of gate size above center
-local PUNCH_DIST  = 16    -- studs XZ at which we guarantee trigger registration
-local CEIL_GAP    = 8     -- push down if ceiling within this many studs
+local ROAD_HOVER  = 4     
+local GATE_INSIDE = 0.30  
+local PUNCH_DIST  = 16    
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -336,8 +335,6 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    local lastSafeY  = QUEUE_POS.Y
-    local prevYErr   = 0
 
     local rcParams = RaycastParams.new()
     rcParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -387,10 +384,12 @@ local function DoRaceLoop(uuidFolder)
         end
 
         local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_INSIDE
+        local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
+        local targetPos = Vector3.new(gateXZ.X, gateTargetY, gateXZ.Z)
+
         local flyLimit  = tick() + 30
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
         local clearDist = math.max(28, arSpeed * 0.07)
-        prevYErr = 0
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
@@ -405,11 +404,9 @@ local function DoRaceLoop(uuidFolder)
             local ch = player.Character
             rcParams.FilterDescendantsInstances = ch and {car, ch} or {car}
 
-            local myPos  = root.Position
-            local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
-            local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
-            local distXZ = (gateXZ - myXZ).Magnitude
-            local dirXZ  = (gateXZ - myXZ).Unit
+            local myPos = root.Position
+            local myXZ  = Vector3.new(myPos.X, 0, myPos.Z)
+            local distXZ= (gateXZ - myXZ).Magnitude
 
             -- ── SMOOTH PASS-THROUGH ────────────────────────────────────
             if distXZ <= PUNCH_DIST then
@@ -429,91 +426,63 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── DYNAMIC TERRAIN Y COMPUTATION (V24b FIX) ───────────────
-            local targetY = gateTargetY
-            local roadY   = nil
+            -- ── 3D HOMING VECTOR ───────────────────────────────────────
+            -- Calculates a true 3D straight line directly to the gate.
+            local dir3D = (targetPos - myPos).Unit
+            local desiredVelX = dir3D.X * arSpeed
+            local desiredVelY = dir3D.Y * arSpeed
+            local desiredVelZ = dir3D.Z * arSpeed
 
-            -- 1. High-Origin Raycast: Start 50 studs ABOVE the car. 
-            --    Prevents getting trapped below road meshes.
-            local floorRay = Workspace:Raycast(myPos + Vector3.new(0, 50, 0), Vector3.new(0, -150, 0), rcParams)
+            -- ── TERRAIN REPULSION CUSHIONS ─────────────────────────────
+            local roadY = nil
+            local dirXZ = (gateXZ - myXZ).Unit
             
-            -- 2. Forward Anticipation: Look 40 studs ahead to predict incoming hills/drops.
-            local aheadPos = myPos + (dirXZ * 40)
-            local aheadRay = Workspace:Raycast(aheadPos + Vector3.new(0, 50, 0), Vector3.new(0, -150, 0), rcParams)
-
-            if floorRay then
-                roadY = floorRay.Position.Y
-            end
+            -- Floor directly below
+            local floorRay = Workspace:Raycast(myPos + Vector3.new(0, 50, 0), Vector3.new(0, -250, 0), rcParams)
+            if floorRay then roadY = floorRay.Position.Y end
             
+            -- Floor ahead to anticipate hills
+            local aheadPos = myPos + (dirXZ * 60)
+            local aheadRay = Workspace:Raycast(aheadPos + Vector3.new(0, 50, 0), Vector3.new(0, -250, 0), rcParams)
             if aheadRay then
                 if roadY then
-                    -- Prioritize whichever is higher to safely climb upcoming inclines
                     roadY = math.max(roadY, aheadRay.Position.Y)
                 else
                     roadY = aheadRay.Position.Y
                 end
             end
 
+            -- Apply Magnetic Floor Cushion
             if roadY then
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
-                -- Hard snap up if we accidentally sunk into the terrain
-                if myPos.Y < roadY + 1 then
-                    targetY = roadY + ROAD_HOVER + 6 
+                local safeFloor = roadY + ROAD_HOVER
+                local cushionY = safeFloor + 6
+                
+                -- If we dip too close to the floor, push the vertical velocity upward.
+                if myPos.Y < cushionY then
+                    local pushUp = (cushionY - myPos.Y) * 15
+                    desiredVelY = math.max(desiredVelY, pushUp)
+                end
+                
+                -- Absolute bottom out prevention
+                if myPos.Y < safeFloor then
+                    desiredVelY = math.max(desiredVelY, (safeFloor - myPos.Y) * 30)
                 end
             end
 
-            -- ── CEILING GUARD ──────────────────────────────────────────
-            local MIN_HEADROOM = 10
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
+            -- Apply Magnetic Ceiling Cushion (Bridges/Tunnels)
+            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 30, 0), rcParams)
             if ceilHit then
-                local ceilY    = ceilHit.Position.Y
-                local gap      = ceilY - myPos.Y
-                local headroom = roadY and (ceilY - roadY) or gap
-
-                if gap < CEIL_GAP then
-                    if headroom > MIN_HEADROOM then
-                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 2
-                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER) end
-                        targetY = math.min(targetY, pushDown)
-                    else
-                        local topRay = Workspace:Raycast(
-                            Vector3.new(myPos.X, ceilY + 0.5, myPos.Z),
-                            Vector3.new(0, 80, 0), rcParams)
-                        if topRay then
-                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER)
-                        else
-                            targetY = math.max(targetY, ceilY + ROAD_HOVER)
-                        end
-                    end
+                local safeCeil = ceilHit.Position.Y - 5
+                local cushionY = safeCeil - 5
+                
+                if myPos.Y > cushionY then
+                    local pushDown = (myPos.Y - cushionY) * 15
+                    desiredVelY = math.min(desiredVelY, -pushDown)
                 end
             end
 
-            -- Absolute minimum altitude clamp
-            if roadY then
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
-            end
-
-            local yErr   = targetY - myPos.Y
-            local yDeriv = yErr - prevYErr
-            prevYErr = yErr
-
-            -- Stronger Upward Gains for rapid terrain climbing
-            local Kp, Kd, maxVY
-            if yErr < -8 then
-                Kp=10; Kd=2; maxVY=120
-            elseif yErr < -3 then
-                Kp=7;  Kd=3; maxVY=60
-            elseif yErr > 10 then
-                Kp=12; Kd=2; maxVY=150 -- Extreme pull up for steep hills
-            elseif yErr > 3 then
-                Kp=6;  Kd=3; maxVY=60
-            else
-                Kp=3;  Kd=5; maxVY=15
-            end
-            
-            local velY = math.clamp(yErr*Kp + yDeriv*Kd, -maxVY, maxVY)
-
-            root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X*arSpeed, velY, dirXZ.Z*arSpeed)
+            -- Execute the movement
+            root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
             SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
@@ -527,7 +496,6 @@ local function DoRaceLoop(uuidFolder)
 
         if cpCleared then
             clearedSet[cpIdx] = true
-            lastSafeY = gateTargetY 
             SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTargetY), 0, 230, 100)
             task.wait(0.2)
         else
@@ -660,7 +628,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V24b"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V24c"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1069,7 +1037,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Dynamic Terrain V24b"
+arSub.Text   = "City Highway Race  ·  3D Homing V24c"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1218,11 +1186,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V24b")
-InfoRow(TabMisc, "🔧  Dynamic terrain pass-through engine")
-InfoRow(TabMisc, "🎚️  Forward-scanning terrain anticipation")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V24c")
+InfoRow(TabMisc, "🔧  True 3D Homing Flight Engine")
+InfoRow(TabMisc, "🎚️  Magnetic repulsion cushion against hills/dives")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Fixed underground dipping issue.")
+InfoRow(TabMisc, "📋  Changelog: Fixed downhill overshooting issue.")
 
 -- Open Race tab by default
 do
@@ -1401,5 +1369,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J24b] Midnight Chasers — V24b Dynamic Terrain Ready")
-print("[J24b] Anticipation active: Vehicle will now predict and lift over upcoming hills.")
+print("[J24c] Midnight Chasers — V24c 3D Homing Engine Ready")
+print("[J24c] Vehicle will now calculate true 3D vectors to dive towards low checkpoints.")
