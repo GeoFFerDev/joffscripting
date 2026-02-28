@@ -1,14 +1,32 @@
 --[[
-  JOSEPEDOV V39 — MIDNIGHT CHASERS
+  JOSEPEDOV V40 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
-  V39 FIXES & ADDITIONS
+  V40 — GAME CONTENT PRELOADER
   ══════════════════════════════════════════════════════════════
-  - Restored missing World functions (Traffic/FPS/FullBright).
-  - Added dedicated "Farm Cruising Speed" slider to the Farm Tab.
-  - Safe-wrapped executor-specific functions like getconnections().
-  - Maintains all previous features.
+  The loading screen now preloads real game assets (180 mesh +
+  texture IDs extracted from the place XML) via
+  ContentProvider:PreloadAsync() before the UI appears.
+
+  This eliminates the "game paused" / pop-in stutter that occurs
+  on slow connections because assets were streaming in during
+  active gameplay. The loading bar now reflects actual download
+  progress, not arbitrary task.wait() timers.
+
+  Progress phases:
+    5  %  — Script init
+    5–55%  — ContentProvider asset preload (real progress)
+    60  %  — Config & world setup
+    70  %  — Race engine calibration
+    80  %  — UI build
+    95  %  — System hooks
+   100  %  — Ready
+
+  Camera fix (from V25): tween cancelled before CameraType restore;
+  always restores to Custom to avoid camera lock on mobile.
+
+  All V39 features retained unchanged.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -84,7 +102,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V39  ·  ULTIMATE EDITION"
+subLbl.Text   = "JOSEPEDOV V40  ·  ULTIMATE + PRELOADER"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -209,8 +227,249 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  CONFIG & STATE
 -- ─────────────────────────────────────────────────────────────
-SetProg(5, "Loading Configurations...", 1)
-task.wait(0.3)
+SetProg(5, "Initialising...", 1)
+task.wait(0.1)
+
+-- ─────────────────────────────────────────────────────────────
+--  GAME CONTENT PRELOADER  (V40)
+-- ─────────────────────────────────────────────────────────────
+--  Preloads 180 mesh + texture IDs from the place XML via
+--  ContentProvider:PreloadAsync(). This runs before any gameplay
+--  starts so assets don't stream in mid-race on slow connections.
+--
+--  ContentProvider:PreloadAsync(assets, callback) fires the
+--  callback for each asset as it finishes. We use that to drive
+--  the loading bar from 5% → 55% with real download progress.
+-- ─────────────────────────────────────────────────────────────
+do
+    local ContentProvider = game:GetService("ContentProvider")
+
+    local GAME_ASSETS = {
+    "rbxassetid://14596824377",
+    "rbxassetid://15694239990",
+    "rbxassetid://14916031176",
+    "rbxassetid://14916031762",
+    "rbxassetid://14916031498",
+    "rbxassetid://14573638321",
+    "rbxassetid://14573641912",
+    "rbxassetid://14573638882",
+    "rbxassetid://3557627978",
+    "rbxassetid://15179434724",
+    "rbxassetid://7598115762",
+    "rbxassetid://17363357783",
+    "rbxassetid://17363363505",
+    "rbxassetid://17363358725",
+    "rbxassetid://17363364909",
+    "rbxassetid://17363362508",
+    "rbxassetid://17363359610",
+    "rbxassetid://15612489676",
+    "rbxassetid://15612489007",
+    "rbxassetid://15612486885",
+    "rbxassetid://15618247443",
+    "rbxassetid://15618246166",
+    "rbxassetid://15618248516",
+    "rbxassetid://15619659905",
+    "rbxassetid://15619658757",
+    "rbxassetid://15619661379",
+    "rbxassetid://15619661930",
+    "rbxassetid://15619660554",
+    "rbxassetid://14321936910",
+    "rbxassetid://14321895433",
+    "rbxassetid://17532595840",
+    "rbxassetid://14322193920",
+    "rbxassetid://17532707928",
+    "rbxassetid://17532696203",
+    "rbxassetid://9032941519",
+    "rbxassetid://17532733590",
+    "rbxassetid://17532606253",
+    "rbxassetid://14322027695",
+    "rbxassetid://17532702579",
+    "rbxassetid://14322159481",
+    "rbxassetid://17532725538",
+    "rbxassetid://14322039547",
+    "rbxassetid://17532664747",
+    "rbxassetid://14322051218",
+    "rbxassetid://17532684382",
+    "rbxassetid://9032942634",
+    "rbxassetid://17532626845",
+    "rbxassetid://14322168910",
+    "rbxassetid://17532125441",
+    "rbxassetid://14322007262",
+    "rbxassetid://17532654358",
+    "rbxassetid://9032943009",
+    "rbxassetid://17532638483",
+    "rbxassetid://14322125716",
+    "rbxassetid://17532689859",
+    "rbxassetid://14925232957",
+    "rbxassetid://15617404429",
+    "rbxassetid://15617560642",
+    "rbxassetid://15617510215",
+    "rbxassetid://15617468676",
+    "rbxassetid://15617507385",
+    "rbxassetid://15617505891",
+    "rbxassetid://15617496872",
+    "rbxassetid://15617508688",
+    "rbxassetid://15617526680",
+    "rbxassetid://15617522136",
+    "rbxassetid://15617525633",
+    "rbxassetid://15617524779",
+    "rbxassetid://15617539348",
+    "rbxassetid://15617534625",
+    "rbxassetid://15617537624",
+    "rbxassetid://15617538473",
+    "rbxassetid://16312766199",
+    "rbxassetid://15617545616",
+    "rbxassetid://15617544384",
+    "rbxassetid://15617543339",
+    "rbxassetid://15617541164",
+    "rbxassetid://14957237522",
+    "rbxassetid://14957237982",
+    "rbxassetid://14957238172",
+    "rbxassetid://14957237399",
+    "rbxassetid://9476531852",
+    "rbxassetid://15694239989",
+    "rbxassetid://14618309042",
+    "rbxassetid://14618307636",
+    "rbxassetid://15694240604",
+    "rbxassetid://15694240576",
+    "rbxassetid://15694240587",
+    "rbxassetid://15694240578",
+    "rbxassetid://15694240571",
+    "rbxassetid://15694240594",
+    "rbxassetid://15388429560",
+    "rbxassetid://15393966002",
+    "rbxassetid://15393967431",
+    "rbxassetid://15393968021",
+    "rbxassetid://15393967076",
+    "rbxassetid://15393968246",
+    "rbxassetid://15393966261",
+    "rbxassetid://15393970067",
+    "rbxassetid://15393969220",
+    "rbxassetid://15449028050",
+    "rbxassetid://15449007806",
+    "rbxassetid://15653762686",
+    "rbxassetid://15653759179",
+    "rbxassetid://15653753678",
+    "rbxassetid://8396779051",
+    "rbxassetid://8396780191",
+    "rbxassetid://8396780453",
+    "rbxassetid://8396778565",
+    "rbxassetid://8396779426",
+    "rbxassetid://8396779674",
+    "rbxassetid://120668255183486",
+    "rbxassetid://11985298197",
+    "rbxassetid://14084476116",
+    "rbxassetid://8709286869",
+    "rbxassetid://8709287168",
+    "rbxassetid://8709287027",
+    "rbxassetid://10491935094",
+    "rbxassetid://10491936526",
+    "rbxassetid://8709291137",
+    "rbxassetid://14729082457",
+    "rbxassetid://17363388470",
+    "rbxassetid://17363388781",
+    "rbxassetid://17363389661",
+    "rbxassetid://17363390479",
+    "rbxassetid://17363381009",
+    "rbxassetid://17363384221",
+    "rbxassetid://17363385928",
+    "rbxassetid://17363386673",
+    "rbxassetid://17362258044",
+    "rbxassetid://17362018483",
+    "rbxassetid://17043030320",
+    "rbxassetid://1847258023",
+    "rbxassetid://17532034425",
+    "rbxassetid://15082168287",
+    "rbxassetid://15312718183",
+    "rbxassetid://77050110569160",
+    "rbxassetid://104599847429296",
+    "rbxassetid://100152166184167",
+    "rbxassetid://119787688051772",
+    "rbxassetid://79445842296116",
+    "rbxassetid://108745456784727",
+    "rbxassetid://82787593992844",
+    "rbxassetid://138377290276713",
+    "rbxassetid://128118509350496",
+    "rbxassetid://77998940993647",
+    "rbxassetid://18136917681",
+    "rbxassetid://94273197515900",
+    "rbxassetid://113063094688016",
+    "rbxassetid://16919833005",
+    "rbxassetid://96049226272732",
+    "rbxassetid://14925227270",
+    "rbxassetid://16451871194",
+    "rbxassetid://16300409953",
+    "rbxassetid://16451859860",
+    "rbxassetid://16451861018",
+    "rbxassetid://17650728678",
+    "rbxassetid://17650714317",
+    "rbxassetid://14957237811",
+    "rbxassetid://17096710296",
+    "rbxassetid://17096647872",
+    "rbxassetid://15432308718",
+    "rbxassetid://15432258970",
+    "rbxassetid://107446590373859",
+    "rbxassetid://15449007949",
+    "rbxassetid://75828128041115",
+    "rbxassetid://1215682739",
+    "rbxassetid://96634592210750",
+    "rbxassetid://82152734060733",
+    "rbxassetid://14912709455",
+    "rbxassetid://14912709288",
+    "rbxassetid://14912985134",
+    "rbxassetid://110875201838207",
+    "rbxassetid://128440026726435",
+    "rbxassetid://73224221203377",
+    "rbxassetid://105497871223784",
+    "rbxassetid://90650963888802",
+    "rbxassetid://85145094489827",
+    "rbxassetid://106260443677301",
+    "rbxassetid://129299302881069"
+}
+
+    -- Build Instance wrappers — ContentProvider needs Instance or string
+    -- For string asset IDs the simplest wrapper is a Sound (audio) or
+    -- a MeshPart for mesh IDs; but the cleanest cross-type approach is
+    -- just passing the string IDs directly — PreloadAsync accepts strings.
+    local total   = #GAME_ASSETS
+    local loaded  = 0
+    local BAR_MIN = 5    -- bar % when preload starts
+    local BAR_MAX = 55   -- bar % when preload ends
+
+    SetProg(BAR_MIN, string.format("Preloading game assets... 0/%d", total), 1)
+
+    -- PreloadAsync is blocking and fires callback per asset.
+    -- Wrap in pcall so a failed asset doesn't halt loading.
+    pcall(function()
+        ContentProvider:PreloadAsync(GAME_ASSETS, function(assetId, status)
+            loaded = loaded + 1
+            local pct = BAR_MIN + (loaded / total) * (BAR_MAX - BAR_MIN)
+            local statusStr = (status == Enum.AssetFetchStatus.Success)
+                and string.format("Loaded %d/%d", loaded, total)
+                or  string.format("Loaded %d/%d  (%s)", loaded, total, tostring(status))
+            -- Update bar text and fill — use the same TweenService path SetProg uses
+            TweenService:Create(barFill,
+                TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                {Size = UDim2.new(pct/100, 0, 1, 0)}):Play()
+            barTxt.Text = string.format("  %.0f%%  —  %s", pct, statusStr)
+            -- Advance camera route proportionally
+            local ci = math.max(1, math.min(#CAM_ROUTE,
+                math.round(pct/100 * #CAM_ROUTE + 0.5)))
+            TweenService:Create(cam,
+                TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                {CFrame = CAM_ROUTE[ci][1]}):Play()
+        end)
+    end)
+
+    SetProg(55, string.format("Assets ready!  %d preloaded", loaded), 1)
+    task.wait(0.2)
+end
+
+-- ─────────────────────────────────────────────────────────────
+--  CONFIG & STATE  (continues from 55%)
+-- ─────────────────────────────────────────────────────────────
+SetProg(60, "Loading Configurations...", 1)
+task.wait(0.2)
 
 local Config = {
     AutoRace       = false,
@@ -250,7 +509,7 @@ local FARM_POS  = Vector3.new(0, 10000, 0)
 -- ─────────────────────────────────────────────────────────────
 --  SPEED FARM INFINITE ROAD
 -- ─────────────────────────────────────────────────────────────
-SetProg(20, "Building Infinite Sky Road...", 2)
+SetProg(65, "Building Infinite Sky Road...", 2)
 task.wait(0.3)
 
 local farmRoad = Instance.new("Part")
@@ -277,7 +536,7 @@ end)
 -- ─────────────────────────────────────────────────────────────
 --  WORLD & PERFORMANCE HELPERS (RESTORED IN V39)
 -- ─────────────────────────────────────────────────────────────
-SetProg(35, "Restoring World Modifiers...", 3)
+SetProg(70, "Restoring World Modifiers...", 3)
 task.wait(0.2)
 
 local function ToggleTraffic()
@@ -434,7 +693,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  RACE HELPERS
 -- ─────────────────────────────────────────────────────────────
-SetProg(50, "Calibrating Race Route Logic...", 4)
+SetProg(75, "Calibrating Race Route Logic...", 4)
 task.wait(0.3)
 
 local function FindPlayerRaceFolder()
@@ -492,7 +751,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  AUTO-RACE ENGINE
 -- ─────────────────────────────────────────────────────────────
-SetProg(65, "Hooking Auto-Queue Engine...", 4)
+SetProg(80, "Hooking Auto-Queue Engine...", 4)
 task.wait(0.3)
 
 local GATE_INSIDE  = 0.10 
@@ -675,7 +934,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  UI BUILDER
 -- ─────────────────────────────────────────────────────────────
-SetProg(80, "Assembling Fluent UI...", 5)
+SetProg(85, "Assembling Fluent UI...", 5)
 task.wait(0.2)
 
 local Theme = {
@@ -734,7 +993,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V39"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V40"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1614,10 +1873,23 @@ end)
 SetProg(100, "Ready!")
 task.wait(0.5)
 
-if loadAnimConn then 
-    loadAnimConn:Disconnect() 
+if loadAnimConn then
+    loadAnimConn:Disconnect()
 end
-cam.CameraType = prevCamType
+
+-- Cancel any in-flight camera CFrame tween (SetProg fires one that may
+-- still be running). Snap it to current position so it stops immediately.
+pcall(function()
+    TweenService:Create(cam, TweenInfo.new(0), {CFrame = cam.CFrame}):Play()
+end)
+task.wait()  -- one frame for the snap to settle
+
+-- Always restore to Custom (follow-player) regardless of prevCamType.
+-- On mobile prevCamType is often already Scriptable (custom game camera),
+-- restoring it would leave the camera frozen after the loading screen.
+cam.CameraType = Enum.CameraType.Custom
+cam.CameraSubject = nil  -- let the engine re-attach to the humanoid
+task.wait()  -- one frame for the engine to reattach
 
 TweenService:Create(bg, TweenInfo.new(0.55,Enum.EasingStyle.Quad,Enum.EasingDirection.In), {BackgroundTransparency=1}):Play()
 
@@ -1641,7 +1913,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J39] Midnight Chasers — V39 Ultimate Edition Ready")
-print("[J39] Developed by josepedov")
-print("[J39] Active Hooks: AutoRace, AutoFarm, Anti-AFK, World Mods")
+print("[J40] Midnight Chasers — V40 Ultimate + Preloader Ready")
+print("[J40] Developed by josepedov")
+print("[J40] Active Hooks: AutoRace, AutoFarm, Anti-AFK, World Mods + Preloader")
 print("═════════════════════════════════════════════════\n")
