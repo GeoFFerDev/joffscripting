@@ -129,7 +129,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V24  ·  RAYCAST-FREE EDITION"
+subLbl.Text   = "JOSEPEDOV V25  ·  GRAVITY-SAFE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -393,13 +393,15 @@ end
 --    Used as fallback between CPs so the car doesn't jerk to gate.Y of
 --    an as-yet-unloaded next gate.
 
--- V24: RAYCAST-FREE constants
--- No ceiling ray, no floor ray — both caused underground crashes in V23b.
-local GATE_FRAC  = 0.45  -- fraction above gate center to target (45% = inside trigger)
---   CP28: center=-6.49, size=24.95 → target=+4.74  (trigger top=+5.98) ✓
---   CP29: center=-4.49, size=29.86 → target=+8.95  (trigger top=+10.44) ✓
-local PUNCH_DIST = 14    -- XZ distance at which PivotTo punch-through fires
-local SINK_LIMIT = 18    -- if car drops >18 studs below gateTargetY → emergency snap up
+-- V25: Flight engine constants
+local GATE_FRAC   = 0.45  -- 45% above gate center = inside trigger volume
+--   CP28: center=-6.49, size=24.95 → raw=+4.74  (trigger spans -18.97 → +5.98) ✓
+--   CP29: center=-4.49, size=29.86 → raw=+8.95  (trigger spans -19.43 → +10.44) ✓
+local SAFE_DROP   = 4     -- never target more than this many studs below lastSafeY
+--   Prevents underground targeting if an unknown CP has a small/deep gate.
+local CLEAR_DIST  = 38    -- XZ proximity to count as gate cleared (half gate Z ≈ 60)
+--   No punch-through in V25 — punch-through zeroed velocity causing gravity sink.
+--   Large CLEAR_DIST is sufficient: car is well inside the trigger at 38 studs.
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -407,17 +409,34 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    local lastSafeY  = QUEUE_POS.Y  -- confirmed safe Y from last cleared CP
+    local lastSafeY  = QUEUE_POS.Y  -- confirmed safe Y from last cleared CP (never goes down > SAFE_DROP)
     local prevYErr   = 0            -- PD derivative term
+    local holdVelY   = 15           -- upward hold velocity when between checkpoints
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
         -- ① Find next CP gate
+        --    CRITICAL: while waiting for the next CP to stream in (StreamingEnabled=true),
+        --    the car MUST have velocity control. Without it, gravity pulls the car
+        --    underground during the entire wait (up to 15 seconds = thousands of studs).
         local gatePart, cpIdx
         local waitForCP = tick() + 15
         repeat
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
-            if not gatePart then task.wait(0.1) end
+            if not gatePart then
+                -- Hold car at lastSafeY while waiting for next CP to appear.
+                -- This prevents free-fall during StreamingEnabled CP load delays.
+                local car0  = currentCar
+                local root0 = car0 and (car0.PrimaryPart or currentSeat)
+                if root0 then
+                    local myPos0 = root0.Position
+                    local yErr0  = lastSafeY - myPos0.Y
+                    local hvelY  = math.clamp(yErr0 * 6, -40, 40)
+                    root0.AssemblyLinearVelocity  = Vector3.new(0, hvelY, 0)
+                    root0.AssemblyAngularVelocity = Vector3.zero
+                end
+                task.wait(0.1)
+            end
         until gatePart or tick() > waitForCP
               or not Config.AutoRace or AR_STATE ~= "RACING"
 
@@ -457,17 +476,18 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- ③ Gate target — 45% above gate center (solidly inside trigger volume)
-        --    Gate centers are underground; 45% brings target near arch top
-        --    but still 1-2 studs inside the hitbox where the server fires.
-        local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_FRAC
+        -- ③ Gate target — 45% above center, floored to lastSafeY - SAFE_DROP
+        --    The 45% formula works for large gates (CP28/29 sizeY≈25-30).
+        --    For unknown smaller CPs, raw target could be underground.
+        --    SAFE_DROP floor: never target more than 4 studs below last confirmed safe Y.
+        local rawTargetY  = gatePart.Position.Y + gatePart.Size.Y * GATE_FRAC
+        local gateTargetY = math.max(rawTargetY, lastSafeY - SAFE_DROP)
 
-        -- ④ Fly toward the gate (V24 — raycast-free)
+        -- ④ Fly toward the gate (V25 — no punch-through, no velocity zeroing)
         local flyLimit  = tick() + 30
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
-        -- Speed-scaled proximity: at 600 st/s the car covers ~10 studs/frame,
-        -- so widen the clearance window to guarantee gate contact.
-        local clearDist = math.max(28, arSpeed * 0.07)
+        -- Speed-scaled proximity: at 600 st/s car covers ~10 studs/frame.
+        local clearDist = math.max(CLEAR_DIST, arSpeed * 0.07)
         prevYErr = 0
 
         while tick() < flyLimit do
@@ -476,7 +496,14 @@ local function DoRaceLoop(uuidFolder)
             if not gatePart.Parent then cpCleared = true; break end
 
             local car  = currentCar
-            if not car then task.wait(0.05); continue end
+            if not car then
+                -- Car temporarily nil — hold last safe Y so gravity can't sink us
+                local root0 = currentSeat
+                if root0 then
+                    root0.AssemblyLinearVelocity = Vector3.new(0, holdVelY, 0)
+                end
+                task.wait(0.05); continue
+            end
             local root = car.PrimaryPart or currentSeat
             if not root then task.wait(0.05); continue end
 
@@ -485,82 +512,40 @@ local function DoRaceLoop(uuidFolder)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
-            -- ── PUNCH-THROUGH ───────────────────────────────────────
-            -- At PUNCH_DIST studs away, PivotTo directly into the gate.
-            -- Guarantees the car body overlaps the server trigger volume
-            -- for at least one physics frame → server always registers.
-            if distXZ <= PUNCH_DIST then
-                local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
-                pcall(function()
-                    car:PivotTo(CFrame.new(
-                        gatePart.Position.X, gateTargetY, gatePart.Position.Z
-                    ) * CFrame.Angles(0, ry, 0))
-                end)
-                root.AssemblyLinearVelocity  = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                task.wait(0.08)   -- one server tick to register the Touched event
-                cpCleared = true
-                break
-            end
-
+            -- Proximity clear — NO punch-through in V25.
+            -- Punch-through zeroed velocity → gravity pulled car underground
+            -- during the mandatory wait periods. Large CLEAR_DIST (38 studs)
+            -- guarantees the car is inside the gate trigger volume.
             if distXZ <= clearDist then
                 cpCleared = true
                 break
             end
 
-            -- ── Y COMPUTATION (V24 — raycast-free) ──────────────────
-            --
-            -- WHY NO RAYCASTS:
-            --   Floor ray: road is CanCollide=false → passes through to
-            --     underground geometry at Y≈-25 → lies about road level.
-            --   Ceiling ray: hits the GATE ARCH ITSELF (top Y≈+6 for CP28)
-            --     → gap≈2 < CEIL_GAP(8) → ceiling guard fires on the gate →
-            --     pushDown formula sends car to Y≈-8 → underground.
-            --
-            -- SOLUTION: target gateTargetY directly, every frame.
-            -- The gate geometry is the ground truth — if the car is at
-            -- gateTargetY it is inside the trigger volume. No sensor needed.
-
+            -- ── Y COMPUTATION (V25 — no raycasts, no punch-through) ──
+            -- targetY is gateTargetY (already clamped against lastSafeY above).
+            -- The PD controller drives the car to this height every frame.
+            -- AssemblyLinearVelocity is ALWAYS set — gravity never wins.
             local targetY = gateTargetY
 
-            -- Emergency underground catch (no raycast needed):
-            -- If the car somehow sinks more than SINK_LIMIT studs below the
-            -- gate target (e.g. briefly clipped by physics), hard-snap it back.
-            if myPos.Y < gateTargetY - SINK_LIMIT then
-                pcall(function()
-                    local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
-                    car:PivotTo(CFrame.new(myPos.X, gateTargetY, myPos.Z)
-                        * CFrame.Angles(0, ry, 0))
-                end)
-                root.AssemblyLinearVelocity  = Vector3.new(0, 30, 0)
-                root.AssemblyAngularVelocity = Vector3.zero
-                task.wait(0.05)
-            end
-
-            -- PD controller — asymmetric gains:
-            -- Downward correction stronger (car drifts UP at high XZ speed).
+            -- PD controller — asymmetric: downward correction stronger than up.
             local yErr   = targetY - myPos.Y
             local yDeriv = yErr - prevYErr
             prevYErr = yErr
 
             local Kp, Kd, maxVY
             if yErr < -8 then
-                -- Above target by >8: strong downward pull
-                Kp=10; Kd=2; maxVY=120
+                Kp=10; Kd=2; maxVY=100  -- above target >8: pull down hard
             elseif yErr < -3 then
-                -- Above target 3-8: moderate down
-                Kp=7;  Kd=3; maxVY=60
+                Kp=7;  Kd=3; maxVY=55   -- above target 3-8: moderate down
             elseif yErr > 10 then
-                -- Below target by >10: strong upward
-                Kp=8;  Kd=2; maxVY=90
+                Kp=8;  Kd=2; maxVY=90   -- below target >10: push up hard
             elseif yErr > 3 then
-                -- Below target 3-10: moderate up
-                Kp=5;  Kd=3; maxVY=45
+                Kp=5;  Kd=3; maxVY=45   -- below target 3-10: moderate up
             else
-                -- Within 3 studs: fine hold
-                Kp=3;  Kd=5; maxVY=15
+                Kp=4;  Kd=5; maxVY=20   -- within 3: fine hold
             end
             local velY = math.clamp(yErr*Kp + yDeriv*Kd, -maxVY, maxVY)
+            holdVelY = velY  -- remember last good velY for use during wait periods
 
             local dirXZ = (gateXZ - myXZ).Unit
             root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X*arSpeed, velY, dirXZ.Z*arSpeed)
@@ -579,6 +564,16 @@ local function DoRaceLoop(uuidFolder)
             clearedSet[cpIdx] = true
             lastSafeY = gateTargetY  -- record confirmed safe height for this CP
             SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTargetY), 0, 230, 100)
+            -- Coast with a gentle upward velocity — NEVER zero velocity.
+            -- Zero velocity → gravity sinks car underground during the 0.2s wait.
+            do
+                local car0  = currentCar
+                local root0 = car0 and (car0.PrimaryPart or currentSeat)
+                if root0 then
+                    root0.AssemblyLinearVelocity  = Vector3.new(0, 20, 0)
+                    root0.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
             task.wait(0.2)
         else
             SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
@@ -1266,9 +1261,9 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V24")
-InfoRow(TabMisc, "🔧  Raycast-free · Gate-inside Y · Punch-through")
-InfoRow(TabMisc, "🎚️  Asymmetric PD · Emergency snap · Speed-scaled clear")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V25")
+InfoRow(TabMisc, "🔧  No velocity zeroing · Gravity-safe coast · Hold loop")
+InfoRow(TabMisc, "🎚️  lastSafeY floor · SAFE_DROP clamp · Async-safe")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: see script header")
 
@@ -1452,6 +1447,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J24] Midnight Chasers — V24 raycast-free flight engine ready")
-print("[J24] gateTargetY = center+45% · SINK_LIMIT snap · no ceiling/floor ray")
-print("[J24] ceiling ray hit gate arch in V23b → underground — removed entirely")
+print("[J25] Midnight Chasers — V25 gravity-safe flight engine ready")
+print("[J25] no velocity zeroing · hold loop in waits · SAFE_DROP lastSafeY floor")
+print("[J25] Coast = gentle upward · FindCP wait = hold Y · punch-through removed")
