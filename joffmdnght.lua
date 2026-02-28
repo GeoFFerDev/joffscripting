@@ -1243,7 +1243,21 @@ InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: see script header")
 
 -- Open Race tab by default
-AllTabBtns[1].Btn.MouseButton1Click:Fire()
+-- NOTE: :Fire() on MouseButton1Click is unsupported in most executors (Delta etc.)
+-- and silently halts execution, leaving the loading screen stuck at 80%.
+-- Call the tab-switch logic directly instead.
+do
+    for _,t in pairs(AllTabs)    do t.Frame.Visible = false end
+    for _,b in pairs(AllTabBtns) do
+        b.Btn.BackgroundTransparency = 1
+        b.Btn.TextColor3 = Theme.SubText
+        b.Ind.Visible = false
+    end
+    AllTabs[1].Frame.Visible                 = true
+    AllTabBtns[1].Btn.BackgroundTransparency = 0.82
+    AllTabBtns[1].Btn.TextColor3             = Theme.Text
+    AllTabBtns[1].Ind.Visible                = true
+end
 
 SetProg(95, "Finalising...", 5); task.wait(0.3)
 
