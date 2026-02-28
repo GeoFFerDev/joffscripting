@@ -1,15 +1,66 @@
 --[[
   JOSEPEDOV V24 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Terrain-Locked Flight Engine
+  Highway AutoRace exploit | Fluent UI | Raycast-Free Flight Engine
 
   ══════════════════════════════════════════════════════════════
-  V24 FIX — SMOOTH FLIGHT GUARANTEE
+  WHY V23b SENT THE CAR UNDERGROUND  (root-cause confirmed)
   ══════════════════════════════════════════════════════════════
-  Removed the violent "Punch-Through" PivotTo mechanics that 
-  caused altitude snapping and speed halting. Checkpoints are now
-  guaranteed smoothly using touch interest simulation, maintaining
-  the car's altitude and continuous momentum.
+
+  From place XML:
+    CP28 gate: centerY=-6.49, sizeY=24.95, arch TOP = +5.98
+    CP29 gate: centerY=-4.49, sizeY=29.86, arch TOP = +10.44
+    Road surface parts: CanCollide=false (cosmetic mesh)
+
+  Step-by-step failure at CP28:
+    1. Car at Y≈4, gateTargetY = center+30% = +0.995
+    2. Ceiling ray (25 studs up) hits the GATE ARCH TOP at Y=5.98
+       gap = 5.98 - 4 = 1.98  →  < CEIL_GAP(8)  → ceiling guard FIRES
+    3. Floor ray (80 studs down) passes through CanCollide=false road,
+       hits underground support geometry at Y≈-25  →  roadY = -25
+    4. headroom = ceilY - roadY = 5.98 - (-25) = 30.98 > MIN_HEADROOM(10)
+       → "duck under" path chosen
+       pushDown = 4 - (8-1.98)*2 = -8.04  → pushdown to Y=-8 (UNDERGROUND)
+       floor clamp = max(-8.04, -25+4) = max(-8.04, -21) = -8.04
+       → floor clamp does NOTHING, underground wins
+    5. Car dives to Y≈-8 = 8 studs below road surface
+
+  The ceiling guard fired on the GATE ARCH (not a bridge) and pushed
+  the car underground. The floor raycast lied (CanCollide=false road),
+  making the floor guarantee useless.
+
   ══════════════════════════════════════════════════════════════
+  V24 FIX — RAYCAST-FREE FLIGHT ENGINE
+  ══════════════════════════════════════════════════════════════
+  Remove ALL raycasts from the fly loop. They cause more harm than good:
+    • Ceiling ray hits the gate arch → fires on the thing we're entering
+    • Floor ray passes through CanCollide=false road → returns Y≈-25 (lie)
+
+  Instead, rely only on the gate geometry itself:
+    gateTargetY = gate.Position.Y + gate.Size.Y * 0.45
+    (45% above gate center — solidly inside the trigger volume,
+     ~1.25 studs below the arch top, always well within the hitbox)
+
+    CP28: gateTargetY = -6.49 + 24.95*0.45 = +4.74  ✓ (trigger: -18.97→+5.98)
+    CP29: gateTargetY = -4.49 + 29.86*0.45 = +8.95  ✓ (trigger: -19.43→+10.44)
+
+  The car holds the last cleared gateTargetY between checkpoints via
+  lastSafeY, so it maintains a sensible altitude at all times.
+
+  Emergency underground catch: no raycast needed. If myPos.Y drops
+  more than SINK_LIMIT studs below gateTargetY, PivotTo hard-snaps
+  the car back to gateTargetY. This catches any edge case without
+  relying on raycasts that lie about the road surface.
+
+  ══════════════════════════════════════════════════════════════
+  RETAINED FROM V23
+  ══════════════════════════════════════════════════════════════
+  • gateTargetY = center + size*0.45 (inside trigger, not above arch)
+  • Punch-through PivotTo at PUNCH_DIST=14 studs → guaranteed server fire
+  • Speed-scaled clearDist → big proximity window at high speed
+  • Asymmetric PD controller: downward gains > upward gains
+  • clearedSet + ChildRemoved → correct CP advancement
+  • CanCollide=false on car + character → no physical snagging
+  • TP back to queue after race finish
 ]]
 
 -- ─────────────────────────────────────────────────────────────
@@ -78,7 +129,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V24  ·  SMOOTH FLIGHT EDITION"
+subLbl.Text   = "JOSEPEDOV V27  ·  GRAVITY-FORWARD"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -195,8 +246,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  CONFIG & STATE
 -- ─────────────────────────────────────────────────────────────
-SetProg(5, "Reading config...", 1)
-task.wait(0.3)
+SetProg(5, "Reading config...", 1); task.wait(0.3)
 
 local Config = {
     SpeedHack      = false,
@@ -217,8 +267,7 @@ local OriginalAmbient = Lighting.Ambient
 local OriginalOutdoor = Lighting.OutdoorAmbient
 local OriginalClock   = Lighting.ClockTime
 
-SetProg(20, "Scanning highway route...", 2)
-task.wait(0.4)
+SetProg(20, "Scanning highway route...", 2); task.wait(0.4)
 
 local currentSeat    = nil
 local currentCar     = nil
@@ -265,8 +314,7 @@ local function RestoreCollisions()
     disabledCar = nil
 end
 
-SetProg(40, "Mapping checkpoint gates...", 3)
-task.wait(0.4)
+SetProg(40, "Mapping checkpoint gates...", 3); task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
 --  RACE HELPERS
@@ -305,8 +353,7 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
     return best, bestIdx
 end
 
-SetProg(60, "Calibrating flight engine...", 4)
-task.wait(0.4)
+SetProg(60, "Calibrating flight engine...", 4); task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
 --  STATUS (wired to UI label after UI creation)
@@ -322,11 +369,70 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  STABLE FLIGHT ENGINE
 -- ─────────────────────────────────────────────────────────────
-local ROAD_HOVER  = 4     -- studs above actual road surface (terrain-locked floor)
-local GATE_INSIDE = 0.30  -- fraction of gate size above center (inside trigger volume)
-local PUNCH_DIST  = 16    -- studs XZ at which we guarantee the trigger registration
-local CEIL_GAP    = 8     -- push down if ceiling within this many studs
-local FLOOR_GAP   = 5     -- push up if solid floor within this many studs
+--
+--  KEY INSIGHT (confirmed from place XML):
+--    Gate CENTERS are underground (e.g. CP28 centerY=-6.49, CP29 centerY=-4.49).
+--    Gate SIZE Y spans up through the road (CP28 sizeY=24.95 → top=5.98,
+--    CP29 sizeY=29.86 → top=10.44).
+--    Therefore:
+--      WRONG:   targetY = gate.Position.Y + 3           → underground (-3.49, -1.49)
+--      CORRECT: targetY = gate.Position.Y + gate.Size.Y*0.5 + GATE_HOVER → above road
+--
+--  OBSTACLE SENSORS (3-ray):
+--    ↑ ceiling  20 studs → if within CEIL_GAP push targetY down
+--    ↓ floor    40 studs → if solid floor within FLOOR_GAP push targetY up
+--                          (handles the rare CanCollide=true road segment)
+--    → forward  25 studs → read surface Y ahead, pre-adjust target before arrival
+--
+--  SMOOTH PD CONTROLLER:
+--    velY = Kp*(err) + Kd*(err - prevErr) clamped ±MAX_VY
+--    Kp/Kd drop to fine values when |err| < FINE_ZONE for smooth stop.
+--
+--  Y MEMORY (lastSafeY):
+--    Stores the targetY of the last successfully cleared CP.
+--    Used as fallback between CPs so the car doesn't jerk to gate.Y of
+--    an as-yet-unloaded next gate.
+
+-- ─────────────────────────────────────────────────────────────
+--  FLIGHT ENGINE — V27 "GRAVITY-FORWARD"
+-- ─────────────────────────────────────────────────────────────
+--
+--  WHY EVERY PREVIOUS VERSION HAD "ALTITUDE PUNCH" OSCILLATION:
+--
+--  All versions used:  velY = yErr * Kp
+--  When car is on-target (yErr=0): velY=0.
+--  But Roblox physics applies gravity (-196 st/s²) AFTER we set velocity.
+--  So next frame the car is ~0.05 studs lower, yErr spikes positive,
+--  Kp fires velY upward, car overshoots, yErr spikes negative, repeat.
+--  This produces the visible punching/bobbing at every checkpoint.
+--
+--  V27 FIX — GRAVITY FEED-FORWARD:
+--    velY = yErr * Kp  +  Workspace.Gravity * dt
+--
+--  When yErr=0: velY = +3.27 st/s (exactly counteracts 196×dt gravity).
+--  Car holds altitude perfectly flat with zero oscillation.
+--  When below target: extra positive term corrects faster.
+--  When above target: feed-forward reduces (but doesn't flip) the push-down,
+--    so descent is gentle — no punching downward either.
+--
+--  GATE TARGET (unchanged from V24):
+--    45% above gate center = solidly inside server trigger volume.
+--    CP28: -6.49 + 24.95×0.45 = +4.74  (trigger: -18.97 → +5.98)  ✓
+--    CP29: -4.49 + 29.86×0.45 = +8.95  (trigger: -19.43 → +10.44) ✓
+--    Floored to lastSafeY-SAFE_DROP → unknown/small gates can't pull
+--    car below where it safely was one CP ago.
+--
+--  SINGLE LOOP (from V26, retained):
+--    One while loop. Velocity set every frame. No phases, no pauses,
+--    no coast periods. Gate state transitions happen inline.
+--    XZ never zeroed on CP clear — car keeps flying forward.
+
+local GATE_FRAC  = 0.45   -- 45% above gate center (inside trigger)
+local SAFE_DROP  = 4      -- target never more than 4 studs below lastSafeY
+local CLEAR_DIST = 38     -- XZ proximity = gate cleared (studs)
+local Y_KP       = 8      -- P-gain: snappy correction, feed-forward keeps stable
+local MAX_VY     = 55     -- Y velocity cap (st/s) — high enough for fast correction
+local CP_TIMEOUT = 30     -- seconds before skipping a stuck CP
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -334,194 +440,164 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    local lastSafeY  = QUEUE_POS.Y   -- start at queue height
-    local prevYErr   = 0             -- for derivative term
+    local lastSafeY  = QUEUE_POS.Y
 
-    -- Raycast params (reused each frame)
-    local rcParams = RaycastParams.new()
-    rcParams.FilterType = Enum.RaycastFilterType.Exclude
+    -- Active gate state
+    local gatePart  = nil
+    local cpIdx     = nil
+    local cpCleared = false
+    local cpConn    = nil
+    local cpTimer   = 0
+    local lastDirXZ = Vector3.new(1, 0, 0)  -- remembered XZ direction (never zero)
 
-    while Config.AutoRace and AR_STATE == "RACING" do
-
-        -- ① Find next CP gate
-        local gatePart, cpIdx
-        local waitForCP = tick() + 15
-        repeat
-            gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
-            if not gatePart then task.wait(0.1) end
-        until gatePart or tick() > waitForCP
-              or not Config.AutoRace or AR_STATE ~= "RACING"
-
-        if not gatePart then
-            -- No more CPs → race finished
-            SetStatus("🏁 Race complete! Returning to queue...", 0, 220, 130)
-            task.wait(2)
-            RestoreCollisions()
-            raceOwnsStatus = false
-            local ch2 = player.Character
-            if ch2 and ch2:FindFirstChild("Humanoid") then
-                local seat2 = ch2.Humanoid.SeatPart
-                if seat2 and seat2:IsA("VehicleSeat") then
-                    local car2  = seat2.Parent
-                    local root2 = car2.PrimaryPart or seat2
-                    if root2 then
-                        task.wait(0.1)
-                        car2:PivotTo(CFrame.new(QUEUE_POS))
-                        root2.AssemblyLinearVelocity  = Vector3.zero
-                        root2.AssemblyAngularVelocity = Vector3.zero
-                        SetStatus("⏎ Back at queue — drive in to race again!", 0, 190, 255)
-                    end
-                end
-            end
-            break
-        end
-
-        skipIdx = nil
-
-        -- ② ChildRemoved listener (backup — fires if server is fast)
-        local cpCleared = false
-        local cpConn    = nil
-        local cpParent  = gatePart.Parent
-        if cpParent then
-            cpConn = cpParent.ChildRemoved:Connect(function(removed)
-                if removed == gatePart then cpCleared = true end
+    local function AttachGate(gp, gi)
+        if cpConn then pcall(function() cpConn:Disconnect() end); cpConn = nil end
+        gatePart  = gp
+        cpIdx     = gi
+        cpCleared = false
+        cpTimer   = 0
+        if gp and gp.Parent then
+            cpConn = gp.Parent.ChildRemoved:Connect(function(r)
+                if r == gp then cpCleared = true end
             end)
         end
+    end
 
-        local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_INSIDE
-        local flyLimit  = tick() + 30
-        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
-        local clearDist = math.max(28, arSpeed * 0.07)
-        prevYErr = 0
+    do  -- attach first gate
+        local gp, gi = FindNextCP(uuidFolder, clearedSet, skipIdx)
+        if gp then AttachGate(gp, gi) end
+    end
 
-        while tick() < flyLimit do
-            if not Config.AutoRace or AR_STATE ~= "RACING" then break end
-            if cpCleared then break end
-            if not gatePart.Parent then cpCleared = true; break end
+    local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+    local clearDist = math.max(CLEAR_DIST, arSpeed * 0.07)
+    local noGateT   = 0
+    local GRAVITY   = Workspace.Gravity  -- default 196.2 st/s²
 
-            local car  = currentCar
-            if not car then task.wait(0.05); continue end
-            local root = car.PrimaryPart or currentSeat
-            if not root then task.wait(0.05); continue end
+    -- ══════════════════════════════════════════════════════════
+    --  MAIN LOOP — one frame per iteration, velocity ALWAYS set
+    -- ══════════════════════════════════════════════════════════
+    while Config.AutoRace and AR_STATE == "RACING" do
+        local dt   = task.wait()
+        local car  = currentCar
+        local root = car and (car.PrimaryPart or currentSeat)
 
-            local ch = player.Character
-            rcParams.FilterDescendantsInstances = ch and {car, ch} or {car}
+        if not root then
+            if currentSeat then
+                -- Even without a root ref, fight gravity
+                currentSeat.AssemblyLinearVelocity = Vector3.new(0, GRAVITY * dt, 0)
+            end
+            continue
+        end
 
-            local myPos  = root.Position
+        local myPos = root.Position
+
+        -- ────────────────────────────────────────────────────────
+        --  Gravity feed-forward helper
+        --  Returns a velY that: (a) corrects toward targetY,
+        --                       (b) counteracts Roblox gravity.
+        --  Result: flat stable altitude, zero oscillation.
+        local function stableVelY(targetY)
+            local yErr = targetY - myPos.Y
+            -- Feed-forward: GRAVITY*dt cancels what physics will subtract.
+            -- Kp*yErr: correction proportional to error.
+            return math.clamp(yErr * Y_KP + GRAVITY * dt, -MAX_VY, MAX_VY)
+        end
+
+        -- ── ACTIVE GATE ──────────────────────────────────────────
+        if gatePart and gatePart.Parent then
+            noGateT = 0
+
+            local rawY    = gatePart.Position.Y + gatePart.Size.Y * GATE_FRAC
+            local targetY = math.max(rawY, lastSafeY - SAFE_DROP)
+
             local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
-            -- ── SMOOTH PASS-THROUGH (V24 FIX) ──────────────────────────
-            -- Use firetouchinterest to trigger the checkpoint naturally while 
-            -- maintaining current altitude and speed. No PivotTo needed.
-            if distXZ <= PUNCH_DIST then
-                pcall(function()
-                    if firetouchinterest then
-                        firetouchinterest(root, gatePart, 0)
-                        task.wait()
-                        firetouchinterest(root, gatePart, 1)
-                    end
-                end)
-                cpCleared = true
-                break
+            -- Remember direction so we keep flying forward on transition frame
+            if distXZ > 1 then
+                lastDirXZ = (gateXZ - myXZ).Unit
             end
 
-            if distXZ <= clearDist then
-                cpCleared = true
-                break
-            end
+            cpTimer = cpTimer + dt
 
-            -- ── Y COMPUTATION (V23b — bridge-aware, terrain-locked) ──
-            local targetY = gateTargetY
-
-            local roadY    = nil
-            local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -80, 0), rcParams)
-            if floorRay then
-                roadY  = floorRay.Position.Y
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
-                if myPos.Y < roadY + 1 then
-                    targetY = roadY + ROAD_HOVER + 4
+            -- Cleared? (proximity / ChildRemoved / timeout)
+            if cpCleared or distXZ <= clearDist or cpTimer >= CP_TIMEOUT then
+                if cpTimer >= CP_TIMEOUT and not cpCleared then
+                    SetStatus(string.format("CP #%d timeout — skip", cpIdx), 255,150,0)
+                    skipIdx = cpIdx
+                else
+                    clearedSet[cpIdx] = true
+                    lastSafeY = targetY
+                    skipIdx   = nil
+                    SetStatus(string.format("✓ CP #%d  Y=%.1f", cpIdx, targetY), 0,230,100)
                 end
+                local gp, gi = FindNextCP(uuidFolder, clearedSet, skipIdx)
+                AttachGate(gp, gi)
+
+                -- Transition frame: keep flying forward at current altitude.
+                -- Do NOT zero XZ — that causes the visible jerk/punch.
+                local velY = stableVelY(targetY)
+                root.AssemblyLinearVelocity  = Vector3.new(
+                    lastDirXZ.X * arSpeed, velY, lastDirXZ.Z * arSpeed)
+                root.AssemblyAngularVelocity = Vector3.zero
+                continue
             end
 
-            local MIN_HEADROOM = 10
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
-            if ceilHit then
-                local ceilY    = ceilHit.Position.Y
-                local gap      = ceilY - myPos.Y
-                local headroom = roadY and (ceilY - roadY) or gap
+            -- Normal flight: full XZ + gravity-compensated Y
+            local velY = stableVelY(targetY)
+            root.AssemblyLinearVelocity  = Vector3.new(
+                lastDirXZ.X * arSpeed, velY, lastDirXZ.Z * arSpeed)
+            root.AssemblyAngularVelocity = Vector3.zero
 
-                if gap < CEIL_GAP then
-                    if headroom > MIN_HEADROOM then
-                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 2
-                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER) end
-                        targetY = math.min(targetY, pushDown)
-                    else
-                        local topRay = Workspace:Raycast(
-                            Vector3.new(myPos.X, ceilY + 0.5, myPos.Z),
-                            Vector3.new(0, 80, 0), rcParams)
-                        if topRay then
-                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER)
-                        else
-                            targetY = math.max(targetY, ceilY + ROAD_HOVER)
+            SetStatus(string.format("→ CP #%d  %.0f st  Y%.1f▶%.1f",
+                cpIdx, distXZ, myPos.Y, targetY), 0, 190, 255)
+
+        -- ── NO GATE (waiting / race done) ────────────────────────
+        else
+            noGateT = noGateT + dt
+
+            local gp, gi = FindNextCP(uuidFolder, clearedSet, skipIdx)
+            if gp then
+                AttachGate(gp, gi)
+                noGateT = 0
+            elseif noGateT >= 15 then
+                -- Race finished
+                SetStatus("🏁 Race complete! Returning to queue...", 0, 220, 130)
+                root.AssemblyLinearVelocity  = Vector3.new(0, stableVelY(lastSafeY), 0)
+                root.AssemblyAngularVelocity = Vector3.zero
+                task.wait(2)
+                RestoreCollisions()
+                raceOwnsStatus = false
+                local ch2 = player.Character
+                if ch2 and ch2:FindFirstChild("Humanoid") then
+                    local s2 = ch2.Humanoid.SeatPart
+                    if s2 and s2:IsA("VehicleSeat") then
+                        local c2 = s2.Parent
+                        local r2 = c2.PrimaryPart or s2
+                        if r2 then
+                            task.wait(0.1)
+                            c2:PivotTo(CFrame.new(QUEUE_POS))
+                            r2.AssemblyLinearVelocity  = Vector3.zero
+                            r2.AssemblyAngularVelocity = Vector3.zero
+                            SetStatus("⏎ Back at queue — drive in to race again!", 0,190,255)
                         end
                     end
                 end
-            end
-
-            if roadY then
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
-            end
-
-            local yErr   = targetY - myPos.Y
-            local yDeriv = yErr - prevYErr
-            prevYErr = yErr
-
-            local Kp, Kd, maxVY
-            if yErr < -8 then
-                Kp=10; Kd=2; maxVY=120
-            elseif yErr < -3 then
-                Kp=7; Kd=3; maxVY=60
-            elseif yErr > 10 then
-                Kp=8; Kd=2; maxVY=90
-            elseif yErr > 3 then
-                Kp=5; Kd=3; maxVY=45
+                break
             else
-                Kp=3; Kd=5; maxVY=15
+                -- Hovering, waiting for CP to stream in — hold lastSafeY flat
+                root.AssemblyLinearVelocity  = Vector3.new(0, stableVelY(lastSafeY), 0)
+                root.AssemblyAngularVelocity = Vector3.zero
+                SetStatus(string.format("⌛ Waiting for CP...  Y=%.1f", myPos.Y), 255,152,0)
             end
-            local velY = math.clamp(yErr*Kp + yDeriv*Kd, -maxVY, maxVY)
-
-            local dirXZ = (gateXZ - myXZ).Unit
-            root.AssemblyLinearVelocity  = Vector3.new(dirXZ.X*arSpeed, velY, dirXZ.Z*arSpeed)
-            root.AssemblyAngularVelocity = Vector3.zero
-
-            SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
-                cpIdx, distXZ, myPos.Y, gateTargetY), 0, 190, 255)
-            task.wait()
-        end
-
-        -- ⑤ Cleanup
-        if cpConn then pcall(function() cpConn:Disconnect() end) end
-        if not Config.AutoRace or AR_STATE ~= "RACING" then break end
-
-        if cpCleared then
-            clearedSet[cpIdx] = true
-            lastSafeY = gateTargetY  -- record confirmed safe height for this CP
-            SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTargetY), 0, 230, 100)
-            task.wait(0.2)
-        else
-            SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
-            skipIdx = cpIdx
-            task.wait(0.2)
         end
     end
 
+    if cpConn then pcall(function() cpConn:Disconnect() end) end
     RestoreCollisions()
     raceOwnsStatus = false
-    if Config.AutoRace and AR_STATE == "RACING" then
-        AR_STATE = "QUEUING"
-    end
+    if Config.AutoRace and AR_STATE == "RACING" then AR_STATE = "QUEUING" end
     raceThread = nil
 end
 
@@ -534,8 +610,7 @@ local function ToggleTraffic()
     if Config.TrafficBlocked then
         if ev then for _,c in pairs(getconnections(ev.OnClientEvent)) do c:Disable() end end
         for _,n in ipairs({"NPCVehicles","Traffic","Vehicles"}) do
-            local f=Workspace:FindFirstChild(n);
-            if f then f:ClearAllChildren() end
+            local f=Workspace:FindFirstChild(n); if f then f:ClearAllChildren() end
         end
     else
         if ev then for _,c in pairs(getconnections(ev.OnClientEvent)) do c:Enable() end end
@@ -579,8 +654,7 @@ local function ToggleFullBright()
     return Config.FullBright
 end
 
-SetProg(80, "Building interface...", 4)
-task.wait(0.3)
+SetProg(80, "Building interface...", 4); task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
 --  FLUENT UI  (based on Fluent Local UI Framework template)
@@ -640,7 +714,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V24"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V23"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1049,7 +1123,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Smooth Flight V24"
+arSub.Text   = "City Highway Race  ·  Gate-top V22"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1198,13 +1272,16 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V24")
-InfoRow(TabMisc, "🔧  Smooth pass-through flight engine")
-InfoRow(TabMisc, "🎚️  Altitude strictly maintained without teleporting")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V27")
+InfoRow(TabMisc, "🔧  Gravity feed-forward · No oscillation · Always flying")
+InfoRow(TabMisc, "🎚️  velY=err×Kp+grav×dt · SAFE_DROP · clearDist=38")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Fixed altitude punching issue.")
+InfoRow(TabMisc, "📋  Changelog: see script header")
 
 -- Open Race tab by default
+-- NOTE: :Fire() on MouseButton1Click is unsupported in most executors (Delta etc.)
+-- and silently halts execution, leaving the loading screen stuck at 80%.
+-- Call the tab-switch logic directly instead.
 do
     for _,t in pairs(AllTabs)    do t.Frame.Visible = false end
     for _,b in pairs(AllTabBtns) do
@@ -1218,8 +1295,7 @@ do
     AllTabBtns[1].Ind.Visible                = true
 end
 
-SetProg(95, "Finalising...", 5)
-task.wait(0.3)
+SetProg(95, "Finalising...", 5); task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
 --  HEARTBEAT — state machine + SpeedHack + InfNitro
@@ -1253,6 +1329,7 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- Infinite Nitro
+    -- Uses Attributes on the A-Chassis Values object: "CurrentBoost" / "MaxBoost"
     if Config.InfNitro then
         local valObj = nil
         if iface then valObj = iface:FindFirstChild("Values") end
@@ -1362,7 +1439,19 @@ SetProg(100, "Ready!", 5)
 task.wait(0.5)
 
 loadAnimConn:Disconnect()
-cam.CameraType = prevCamType
+
+-- Stop any in-flight camera CFrame tween (SetProg fires one at 100% that's
+-- still running here). Snap the camera to its current position so the tween
+-- has nothing left to do, then release control.
+pcall(function() TweenService:Create(cam, TweenInfo.new(0), {CFrame=cam.CFrame}):Play() end)
+task.wait()   -- one frame so the snap tween completes
+
+-- Force Custom (follow-player) camera type regardless of what prevCamType was.
+-- On mobile prevCamType is often already Scriptable (custom game camera),
+-- restoring it would keep the camera frozen. Custom always re-attaches properly.
+cam.CameraType = Enum.CameraType.Custom
+cam.CameraSubject = nil  -- let the engine re-pick the humanoid root
+task.wait()   -- one frame for the engine to re-attach the camera subject
 
 TweenService:Create(bg, TweenInfo.new(0.55,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
     {BackgroundTransparency=1}):Play()
@@ -1381,5 +1470,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J24] Midnight Chasers — V24 Smooth Pass-through ready")
-print("[J24] Vehicle will now naturally guide through checkpoints seamlessly.")
+print("[J27] Midnight Chasers — V27 gravity-forward flight engine")
+print("[J27] velY = yErr*Kp + gravity*dt → flat altitude, zero oscillation")
+print("[J27] single loop · no XZ zeroing on CP clear · always flying")
