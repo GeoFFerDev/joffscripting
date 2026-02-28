@@ -1,16 +1,15 @@
 --[[
-  JOSEPEDOV V28 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Map Discovery Engine
+  JOSEPEDOV V29 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Smooth Finish Engine
 
   ══════════════════════════════════════════════════════════════
-  V28 FIX — MAP DISCOVERY COASTING (STREAMING ENABLED)
+  V29 FIX — SMOOTH FINISH & FULL-SPEED COASTING
   ══════════════════════════════════════════════════════════════
-  - Fixed race freezing at CP 38 due to unloaded map chunks.
-  - Replaced the "Hover-Freeze" with "Blind Coasting Mode". If a 
-    checkpoint takes too long to load due to slow internet, the car 
-    will maintain altitude and coast blindly forward along its last 
-    known trajectory to force the Roblox engine to render the map.
-  - Increased Checkpoint Timeout from 15s to 45s.
+  - Fixed a critical bug where the scanner ignored non-numeric 
+    checkpoints (like "Finish"), causing the script to get stuck.
+  - Coasting mode no longer drops the car's speed to 150. It now
+    maintains your exact AutoRace speed for a 100% smooth flight 
+    even when map chunks are loading.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -80,7 +79,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V28  ·  MAP DISCOVERY EDITION"
+subLbl.Text   = "JOSEPEDOV V29  ·  SMOOTH FINISH EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -293,21 +292,42 @@ end
 local function FindNextCP(raceFolder, clearedSet, skipIdx)
     local cpVal = raceFolder:FindFirstChild("Checkpoints")
     if not cpVal then return nil,nil end
+    
     local best, bestIdx = nil, math.huge
+    local fallbackPart = nil
+    
     for _,child in ipairs(cpVal:GetChildren()) do
         if child:IsA("BasePart") then
             local idx = tonumber(child.Name)
-            if idx and idx < bestIdx
-               and idx ~= skipIdx
-               and not (clearedSet and clearedSet[idx]) then
-                best, bestIdx = child, idx
+            if idx then
+                -- It's a standard numbered checkpoint
+                if not (clearedSet and clearedSet[idx]) and idx ~= skipIdx then
+                    if idx < bestIdx then
+                        best, bestIdx = child, idx
+                    end
+                end
+            else
+                -- V29 FIX: Detects the final "Finish" or unnumbered checkpoint
+                if not (clearedSet and clearedSet[child.Name]) and child.Name ~= skipIdx then
+                    fallbackPart = child
+                end
             end
         end
     end
-    return best, bestIdx
+    
+    -- Always prioritize numbers first. If no numbers left, grab the finish line!
+    if best then 
+        return best, bestIdx 
+    end
+    
+    if fallbackPart then
+        return fallbackPart, fallbackPart.Name
+    end
+    
+    return nil, nil
 end
 
-SetProg(60, "Calibrating Map Discovery engine...", 4)
+SetProg(60, "Calibrating Smooth Finish engine...", 4)
 task.wait(0.4)
 
 -- ─────────────────────────────────────────────────────────────
@@ -322,7 +342,7 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  THE MAP DISCOVERY ENGINE (V28)
+--  THE SMOOTH FINISH ENGINE (V29)
 -- ─────────────────────────────────────────────────────────────
 local GATE_INSIDE  = 0.10 
 local TRIGGER_DIST = 25   
@@ -333,30 +353,32 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    local lastDirXZ  = nil -- Stores trajectory for blind coasting
+    local lastDirXZ  = nil 
 
     local rcParams = RaycastParams.new()
     rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
     while Config.AutoRace and AR_STATE == "RACING" do
+        
+        -- Get the user's live speed
+        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        local clearDist = math.max(28, arSpeed * 0.07)
 
         local gatePart, cpIdx
-        local waitForCP = tick() + 45 -- EXTENDED TIMEOUT (45s) for slow map loading
+        local waitForCP = tick() + 45 
+        
         repeat
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
             
             if not gatePart then 
-                -- ── MAP DISCOVERY COASTING (V28 FIX) ──
-                -- If internet is slow, the checkpoint won't be in Workspace.
-                -- We coast blindly forward along our last trajectory to force 
-                -- the Roblox engine to naturally load the next chunk of map.
+                -- ── FULL-SPEED COASTING (V29 FIX) ──
                 if currentCar then
                     local tempRoot = currentCar.PrimaryPart or currentSeat
                     if tempRoot then
                         if lastDirXZ then
-                            SetStatus("📡 Map Loading... Coasting to render next chunk", 255, 180, 50)
-                            -- 150 speed horizontally, exactly 0 vertically to hold altitude perfectly
-                            tempRoot.AssemblyLinearVelocity = Vector3.new(lastDirXZ.X * 150, 0, lastDirXZ.Z * 150)
+                            SetStatus("📡 Map Loading... Coasting ahead", 255, 180, 50)
+                            -- Uses exact arSpeed instead of slowing down to 150
+                            tempRoot.AssemblyLinearVelocity = Vector3.new(lastDirXZ.X * arSpeed, 0, lastDirXZ.Z * arSpeed)
                         else
                             SetStatus("⏳ Waiting for first checkpoint...", 255, 152, 0)
                             tempRoot.AssemblyLinearVelocity = Vector3.zero
@@ -408,8 +430,6 @@ local function DoRaceLoop(uuidFolder)
         local targetPos = Vector3.new(gatePart.Position.X, gateTargetY, gatePart.Position.Z)
 
         local flyLimit  = tick() + 30
-        local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
-        local clearDist = math.max(28, arSpeed * 0.07)
 
         while tick() < flyLimit do
             if not Config.AutoRace or AR_STATE ~= "RACING" then break end
@@ -429,7 +449,7 @@ local function DoRaceLoop(uuidFolder)
             local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
             local distXZ = (targetXZ - myXZ).Magnitude
 
-            -- Update last direction for Coasting Mode (stop updating if too close to avoid snapping)
+            -- Update last direction for Coasting Mode 
             if distXZ > 15 then
                 lastDirXZ = (targetXZ - myXZ).Unit
             end
@@ -482,8 +502,8 @@ local function DoRaceLoop(uuidFolder)
             root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
-            SetStatus(string.format("→ CP #%d  %.0f studs  Y%.1f▶%.1f",
-                cpIdx, distXZ, myPos.Y, targetPos.Y), 0, 190, 255)
+            SetStatus(string.format("→ CP #%s  %.0f studs  Y%.1f▶%.1f",
+                tostring(cpIdx), distXZ, myPos.Y, targetPos.Y), 0, 190, 255)
             task.wait()
         end
 
@@ -493,10 +513,10 @@ local function DoRaceLoop(uuidFolder)
 
         if cpCleared then
             clearedSet[cpIdx] = true
-            SetStatus(string.format("✓ CP #%d cleared  Y=%.1f", cpIdx, gateTargetY), 0, 230, 100)
+            SetStatus(string.format("✓ CP #%s cleared  Y=%.1f", tostring(cpIdx), gateTargetY), 0, 230, 100)
             task.wait(0.2)
         else
-            SetStatus(string.format("CP #%d timed out — skipping", cpIdx), 255, 150, 0)
+            SetStatus(string.format("CP #%s timed out — skipping", tostring(cpIdx)), 255, 150, 0)
             skipIdx = cpIdx
             task.wait(0.2)
         end
@@ -625,7 +645,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V28"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V29"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1034,7 +1054,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Map Discovery V28"
+arSub.Text   = "City Highway Race  ·  Smooth Finish V29"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1183,11 +1203,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V28")
-InfoRow(TabMisc, "🔧  Map Discovery Coasting Engine")
-InfoRow(TabMisc, "🎚️  Forces missing chunks to render naturally")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V29")
+InfoRow(TabMisc, "🔧  Smooth Finish & Full-Speed Coasting")
+InfoRow(TabMisc, "🎚️  Car now recognizes Finish lines correctly")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Fixed unloaded checkpoint voids.")
+InfoRow(TabMisc, "📋  Changelog: Zero deceleration during coasting.")
 
 -- Open Race tab by default
 do
@@ -1366,5 +1386,5 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J28] Midnight Chasers — V28 Map Discovery Coasting Engine Ready")
-print("[J28] Unloaded map chunks will now naturally force-render as the car coasts forward.")
+print("[J29] Midnight Chasers — V29 Smooth Finish Engine Ready")
+print("[J29] Non-numeric checkpoints are now fully supported.")
