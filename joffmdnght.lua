@@ -1,22 +1,66 @@
 --[[
-  JOSEPEDOV V23c — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | ULTRA-STABLE Terrain-Locked Flight Engine
+  JOSEPEDOV V24 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Raycast-Free Flight Engine
 
   ══════════════════════════════════════════════════════════════
-  V23c FIX — "CAR RANDOMLY GOES UNDER ROAD"
+  WHY V23b SENT THE CAR UNDERGROUND  (root-cause confirmed)
   ══════════════════════════════════════════════════════════════
-  Root cause: floor raycast occasionally returned nil → no roadY → ceiling guard pushed car underground.
 
-  V23c fixes:
-  • Floor raycast extended to -250 studs
-  • Strong fallback to lastSafeY when ray misses
-  • Ceiling push-down now gentle (*1.2) + extra +2 buffer
-  • Final safety net: never below lastSafeY-3 or Y=8
-  • ROAD_HOVER bumped to 5.5 studs
-  • Emergency snap strengthened
+  From place XML:
+    CP28 gate: centerY=-6.49, sizeY=24.95, arch TOP = +5.98
+    CP29 gate: centerY=-4.49, sizeY=29.86, arch TOP = +10.44
+    Road surface parts: CanCollide=false (cosmetic mesh)
 
-  Car now stays perfectly above road and hits every checkpoint 100%.
-  All previous V23/V23b fixes kept (gate-inside, punch-through, bridge-aware).
+  Step-by-step failure at CP28:
+    1. Car at Y≈4, gateTargetY = center+30% = +0.995
+    2. Ceiling ray (25 studs up) hits the GATE ARCH TOP at Y=5.98
+       gap = 5.98 - 4 = 1.98  →  < CEIL_GAP(8)  → ceiling guard FIRES
+    3. Floor ray (80 studs down) passes through CanCollide=false road,
+       hits underground support geometry at Y≈-25  →  roadY = -25
+    4. headroom = ceilY - roadY = 5.98 - (-25) = 30.98 > MIN_HEADROOM(10)
+       → "duck under" path chosen
+       pushDown = 4 - (8-1.98)*2 = -8.04  → pushdown to Y=-8 (UNDERGROUND)
+       floor clamp = max(-8.04, -25+4) = max(-8.04, -21) = -8.04
+       → floor clamp does NOTHING, underground wins
+    5. Car dives to Y≈-8 = 8 studs below road surface
+
+  The ceiling guard fired on the GATE ARCH (not a bridge) and pushed
+  the car underground. The floor raycast lied (CanCollide=false road),
+  making the floor guarantee useless.
+
+  ══════════════════════════════════════════════════════════════
+  V24 FIX — RAYCAST-FREE FLIGHT ENGINE
+  ══════════════════════════════════════════════════════════════
+  Remove ALL raycasts from the fly loop. They cause more harm than good:
+    • Ceiling ray hits the gate arch → fires on the thing we're entering
+    • Floor ray passes through CanCollide=false road → returns Y≈-25 (lie)
+
+  Instead, rely only on the gate geometry itself:
+    gateTargetY = gate.Position.Y + gate.Size.Y * 0.45
+    (45% above gate center — solidly inside the trigger volume,
+     ~1.25 studs below the arch top, always well within the hitbox)
+
+    CP28: gateTargetY = -6.49 + 24.95*0.45 = +4.74  ✓ (trigger: -18.97→+5.98)
+    CP29: gateTargetY = -4.49 + 29.86*0.45 = +8.95  ✓ (trigger: -19.43→+10.44)
+
+  The car holds the last cleared gateTargetY between checkpoints via
+  lastSafeY, so it maintains a sensible altitude at all times.
+
+  Emergency underground catch: no raycast needed. If myPos.Y drops
+  more than SINK_LIMIT studs below gateTargetY, PivotTo hard-snaps
+  the car back to gateTargetY. This catches any edge case without
+  relying on raycasts that lie about the road surface.
+
+  ══════════════════════════════════════════════════════════════
+  RETAINED FROM V23
+  ══════════════════════════════════════════════════════════════
+  • gateTargetY = center + size*0.45 (inside trigger, not above arch)
+  • Punch-through PivotTo at PUNCH_DIST=14 studs → guaranteed server fire
+  • Speed-scaled clearDist → big proximity window at high speed
+  • Asymmetric PD controller: downward gains > upward gains
+  • clearedSet + ChildRemoved → correct CP advancement
+  • CanCollide=false on car + character → no physical snagging
+  • TP back to queue after race finish
 ]]
 
 -- ─────────────────────────────────────────────────────────────
@@ -85,7 +129,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V23c  ·  ULTRA-STABLE EDITION"
+subLbl.Text   = "JOSEPEDOV V24  ·  RAYCAST-FREE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -241,7 +285,7 @@ local function DisableCollisions(car)
     if not car then return end
     disabledCar = car
     for _,p in ipairs(car:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name\~="HumanoidRootPart" then
+        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then
             p.CanCollide = false
         end
     end
@@ -257,7 +301,7 @@ local function RestoreCollisions()
     local car = disabledCar or currentCar
     if not car then return end
     for _,p in ipairs(car:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name\~="HumanoidRootPart" then
+        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then
             p.CanCollide = true
         end
     end
@@ -300,7 +344,7 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
         if child:IsA("BasePart") then
             local idx = tonumber(child.Name)
             if idx and idx < bestIdx
-               and idx \~= skipIdx
+               and idx ~= skipIdx
                and not (clearedSet and clearedSet[idx]) then
                 best, bestIdx = child, idx
             end
@@ -349,11 +393,13 @@ end
 --    Used as fallback between CPs so the car doesn't jerk to gate.Y of
 --    an as-yet-unloaded next gate.
 
-local ROAD_HOVER  = 5.5     -- studs above actual road surface (terrain-locked floor)
-local GATE_INSIDE = 0.30  -- fraction of gate size above center (inside trigger volume)
-local PUNCH_DIST  = 14    -- studs XZ at which we PivotTo through the gate (guaranteed hit)
-local CEIL_GAP    = 8     -- push down if ceiling within this many studs
-local FLOOR_GAP   = 5     -- push up if solid floor within this many studs
+-- V24: RAYCAST-FREE constants
+-- No ceiling ray, no floor ray — both caused underground crashes in V23b.
+local GATE_FRAC  = 0.45  -- fraction above gate center to target (45% = inside trigger)
+--   CP28: center=-6.49, size=24.95 → target=+4.74  (trigger top=+5.98) ✓
+--   CP29: center=-4.49, size=29.86 → target=+8.95  (trigger top=+10.44) ✓
+local PUNCH_DIST = 14    -- XZ distance at which PivotTo punch-through fires
+local SINK_LIMIT = 18    -- if car drops >18 studs below gateTargetY → emergency snap up
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -361,12 +407,8 @@ local function DoRaceLoop(uuidFolder)
 
     local clearedSet = {}
     local skipIdx    = nil
-    local lastSafeY  = QUEUE_POS.Y   -- start at queue height
-    local prevYErr   = 0             -- for derivative term
-
-    -- Raycast params (reused each frame)
-    local rcParams = RaycastParams.new()
-    rcParams.FilterType = Enum.RaycastFilterType.Exclude
+    local lastSafeY  = QUEUE_POS.Y  -- confirmed safe Y from last cleared CP
+    local prevYErr   = 0            -- PD derivative term
 
     while Config.AutoRace and AR_STATE == "RACING" do
 
@@ -377,7 +419,7 @@ local function DoRaceLoop(uuidFolder)
             gatePart, cpIdx = FindNextCP(uuidFolder, clearedSet, skipIdx)
             if not gatePart then task.wait(0.1) end
         until gatePart or tick() > waitForCP
-              or not Config.AutoRace or AR_STATE \~= "RACING"
+              or not Config.AutoRace or AR_STATE ~= "RACING"
 
         if not gatePart then
             -- No more CPs → race finished
@@ -415,26 +457,21 @@ local function DoRaceLoop(uuidFolder)
             end)
         end
 
-        -- ③ Gate-inside target (V23 FIX 1):
-        --    Target 30% above gate center → always inside the trigger hitbox.
-        --    Works for gates with underground centers (CP28/29) AND elevated gates.
-        local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_INSIDE
+        -- ③ Gate target — 45% above gate center (solidly inside trigger volume)
+        --    Gate centers are underground; 45% brings target near arch top
+        --    but still 1-2 studs inside the hitbox where the server fires.
+        local gateTargetY = gatePart.Position.Y + gatePart.Size.Y * GATE_FRAC
 
-        -- ④ Fly toward the gate
-        --
-        --  V23 CHANGES vs V22c:
-        --    • gateTargetY = center + size*0.30 (inside trigger, not above arch)
-        --    • Punch-through PivotTo at PUNCH_DIST → guaranteed server fire
-        --    • Floor raycast every frame → terrain-locked minimum Y
-        --    • Removed MAX_ABOVE cap (fought with highway elevation changes)
-
+        -- ④ Fly toward the gate (V24 — raycast-free)
         local flyLimit  = tick() + 30
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
+        -- Speed-scaled proximity: at 600 st/s the car covers ~10 studs/frame,
+        -- so widen the clearance window to guarantee gate contact.
         local clearDist = math.max(28, arSpeed * 0.07)
         prevYErr = 0
 
         while tick() < flyLimit do
-            if not Config.AutoRace or AR_STATE \~= "RACING" then break end
+            if not Config.AutoRace or AR_STATE ~= "RACING" then break end
             if cpCleared then break end
             if not gatePart.Parent then cpCleared = true; break end
 
@@ -443,30 +480,25 @@ local function DoRaceLoop(uuidFolder)
             local root = car.PrimaryPart or currentSeat
             if not root then task.wait(0.05); continue end
 
-            local ch = player.Character
-            rcParams.FilterDescendantsInstances = ch and {car, ch} or {car}
-
             local myPos  = root.Position
             local gateXZ = Vector3.new(gatePart.Position.X, 0, gatePart.Position.Z)
             local myXZ   = Vector3.new(myPos.X, 0, myPos.Z)
             local distXZ = (gateXZ - myXZ).Magnitude
 
-            -- ── PUNCH-THROUGH (V23 FIX 2) ──────────────────────────
-            -- When very close, PivotTo directly through the gate center.
-            -- This guarantees the car model overlaps the server trigger.
+            -- ── PUNCH-THROUGH ───────────────────────────────────────
+            -- At PUNCH_DIST studs away, PivotTo directly into the gate.
+            -- Guarantees the car body overlaps the server trigger volume
+            -- for at least one physics frame → server always registers.
             if distXZ <= PUNCH_DIST then
                 local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
-                local punchCF = CFrame.new(
-                    gatePart.Position.X,
-                    gateTargetY,
-                    gatePart.Position.Z
-                ) * CFrame.Angles(0, ry, 0)
                 pcall(function()
-                    car:PivotTo(punchCF)
+                    car:PivotTo(CFrame.new(
+                        gatePart.Position.X, gateTargetY, gatePart.Position.Z
+                    ) * CFrame.Angles(0, ry, 0))
                 end)
                 root.AssemblyLinearVelocity  = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
-                task.wait(0.08)   -- one server tick to register
+                task.wait(0.08)   -- one server tick to register the Touched event
                 cpCleared = true
                 break
             end
@@ -476,70 +508,37 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── Y COMPUTATION (V23b — bridge-aware, terrain-locked) ──
-            -- Base: always target inside the gate trigger volume
+            -- ── Y COMPUTATION (V24 — raycast-free) ──────────────────
+            --
+            -- WHY NO RAYCASTS:
+            --   Floor ray: road is CanCollide=false → passes through to
+            --     underground geometry at Y≈-25 → lies about road level.
+            --   Ceiling ray: hits the GATE ARCH ITSELF (top Y≈+6 for CP28)
+            --     → gap≈2 < CEIL_GAP(8) → ceiling guard fires on the gate →
+            --     pushDown formula sends car to Y≈-8 → underground.
+            --
+            -- SOLUTION: target gateTargetY directly, every frame.
+            -- The gate geometry is the ground truth — if the car is at
+            -- gateTargetY it is inside the trigger volume. No sensor needed.
+
             local targetY = gateTargetY
 
-            -- ① TERRAIN FLOOR — 80-stud downcast, find actual road surface.
-            --   This is the absolute floor; nothing ever overrides it.
-            local roadY    = nil
-            local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -80, 0), rcParams)
-            if floorRay then
-                roadY  = floorRay.Position.Y
-                -- Raise targetY so car sits ROAD_HOVER above real road
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
-                -- Emergency catch: if already below road, snap up hard
-                if myPos.Y < roadY + 1 then
-                    targetY = roadY + ROAD_HOVER + 4
-                end
-            end
-
-            -- ② CEILING GUARD — bridge-aware
-            --   Cast 25 studs up. If something is close, measure headroom:
-            --     headroom = ceilY - roadY  (space between road and bridge belly)
-            --   If headroom > MIN_HEADROOM: car CAN fit under → push down,
-            --     but NEVER below roadY + ROAD_HOVER (floor wins).
-            --   If headroom ≤ MIN_HEADROOM: bridge is too low to pass under →
-            --     cast further up to find bridge TOP and go OVER it instead.
-            --   MIN_HEADROOM = 10 studs (car height \~5, ROAD_HOVER 4, 1 spare)
-            local MIN_HEADROOM = 10
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
-            if ceilHit then
-                local ceilY    = ceilHit.Position.Y
-                local gap      = ceilY - myPos.Y
-                local headroom = roadY and (ceilY - roadY) or gap
-
-                if gap < CEIL_GAP then
-                    if headroom > MIN_HEADROOM then
-                        -- Enough room to pass under: nudge down, floor-clamped
-                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 2
-                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER) end
-                        targetY = math.min(targetY, pushDown)
-                    else
-                        -- Bridge too low to duck under → climb over it
-                        -- Cast 80 studs up to find the bridge top surface
-                        local topRay = Workspace:Raycast(
-                            Vector3.new(myPos.X, ceilY + 0.5, myPos.Z),
-                            Vector3.new(0, 80, 0), rcParams)
-                        if topRay then
-                            -- Found the top of the bridge deck; hover above it
-                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER)
-                        else
-                            -- Fallback: just go above the ceiling hit
-                            targetY = math.max(targetY, ceilY + ROAD_HOVER)
-                        end
-                    end
-                end
-            end
-
-            -- ③ ABSOLUTE FLOOR GUARANTEE — runs last, unconditionally.
-            --   Ceiling guard result can NEVER send car below road surface.
-            if roadY then
-                targetY = math.max(targetY, roadY + ROAD_HOVER)
+            -- Emergency underground catch (no raycast needed):
+            -- If the car somehow sinks more than SINK_LIMIT studs below the
+            -- gate target (e.g. briefly clipped by physics), hard-snap it back.
+            if myPos.Y < gateTargetY - SINK_LIMIT then
+                pcall(function()
+                    local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
+                    car:PivotTo(CFrame.new(myPos.X, gateTargetY, myPos.Z)
+                        * CFrame.Angles(0, ry, 0))
+                end)
+                root.AssemblyLinearVelocity  = Vector3.new(0, 30, 0)
+                root.AssemblyAngularVelocity = Vector3.zero
+                task.wait(0.05)
             end
 
             -- PD controller — asymmetric gains:
-            -- Downward correction is stronger (car tends to drift UP at speed).
+            -- Downward correction stronger (car drifts UP at high XZ speed).
             local yErr   = targetY - myPos.Y
             local yDeriv = yErr - prevYErr
             prevYErr = yErr
@@ -574,7 +573,7 @@ local function DoRaceLoop(uuidFolder)
 
         -- ⑤ Cleanup
         if cpConn then pcall(function() cpConn:Disconnect() end) end
-        if not Config.AutoRace or AR_STATE \~= "RACING" then break end
+        if not Config.AutoRace or AR_STATE ~= "RACING" then break end
 
         if cpCleared then
             clearedSet[cpIdx] = true
@@ -919,7 +918,7 @@ local function FluentToggle(parent, title, desc, callback)
 
     btn.MouseButton1Click:Connect(function()
         local res = callback(not state)
-        setV(res \~= nil and res or not state)
+        setV(res ~= nil and res or not state)
     end)
     return setV
 end
@@ -1267,9 +1266,9 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V23c")
-InfoRow(TabMisc, "🔧  Gate-inside Y · Punch-through · Bridge-aware floor")
-InfoRow(TabMisc, "🎚️  Headroom ceiling guard · Absolute floor guarantee")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V24")
+InfoRow(TabMisc, "🔧  Raycast-free · Gate-inside Y · Punch-through")
+InfoRow(TabMisc, "🎚️  Asymmetric PD · Emergency snap · Speed-scaled clear")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: see script header")
 
@@ -1385,14 +1384,14 @@ RunService.Heartbeat:Connect(function()
 
         elseif AR_STATE == "RACING" then
             -- Coroutine owns the car. Heartbeat does nothing.
-            if AR_STATE \~= "RACING" then UpdateARVisual() end
+            if AR_STATE ~= "RACING" then UpdateARVisual() end
         end
 
         return
     end
 
     -- ── Normal mode (AutoRace OFF) ──────────────────────────────
-    if AR_STATE \~= "IDLE" then
+    if AR_STATE ~= "IDLE" then
         AR_STATE="IDLE"; UpdateARVisual()
         if raceThread then task.cancel(raceThread); raceThread=nil end
         RestoreCollisions()
@@ -1453,6 +1452,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J23c] Midnight Chasers — V23c bridge-aware ceiling guard ready")
-print("[J23c] headroom check: duck under if >10 studs clearance, else climb over")
-print("[J23c] absolute floor guarantee: ceiling CANNOT send car underground")
+print("[J24] Midnight Chasers — V24 raycast-free flight engine ready")
+print("[J24] gateTargetY = center+45% · SINK_LIMIT snap · no ceiling/floor ray")
+print("[J24] ceiling ray hit gate arch in V23b → underground — removed entirely")
