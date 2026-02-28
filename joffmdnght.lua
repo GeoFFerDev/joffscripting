@@ -25,23 +25,33 @@
   No more "ghost passes" where the car skims just above.
 
   ══════════════════════════════════════════════════════════════
-  V23 FIX 3 — TERRAIN-LOCKED Y (dynamic elevation)
+  V23b FIX — BRIDGE CEILING CONFLICT
   ══════════════════════════════════════════════════════════════
-  Every frame, a downward raycast (80 studs) finds the actual road
-  surface under the car. targetY is always at least:
-    roadSurfaceY + ROAD_HOVER (4 studs above actual surface)
-  This means rising/falling highway sections are tracked automatically.
-  The car never sinks below road level or floats above it due to stale
-  checkpoint Y values.
+  Bug: bridge at same height as car → ceiling guard pushed targetY DOWN
+  below road surface → floor guard fought UP → car dragged underground.
+
+  Root cause: ceiling guard had no awareness of how much room exists
+  between the road and the bridge soffit.
+
+  V23b FIX — Headroom-aware ceiling guard:
+    headroom = ceilY - roadY   (space between road and bridge belly)
+    if headroom > 10 studs  → can fit under → push down BUT
+                               floor-clamped (road + ROAD_HOVER always wins)
+    if headroom ≤ 10 studs  → bridge too low to pass under →
+                               cast up to find bridge TOP → go OVER it
+    Absolute floor guarantee runs LAST unconditionally:
+      targetY = math.max(targetY, roadY + ROAD_HOVER)
+    This means ceiling guard output can NEVER send the car underground.
 
   ══════════════════════════════════════════════════════════════
-  STABLE FLIGHT ENGINE (V23)
+  STABLE FLIGHT ENGINE (V23b)
   ══════════════════════════════════════════════════════════════
   • Gate-inside targeting: car always inside trigger volume
   • Punch-through PivotTo at 14 studs → guaranteed server registration
   • Terrain floor raycast every frame: road surface + 4 studs minimum
+  • Bridge-aware ceiling: headroom check → duck under OR climb over
+  • Absolute floor guarantee runs last: ceiling CANNOT send car underground
   • PD controller: proportional + derivative, asymmetric gains
-  • Ceiling guard ↑ 20 studs, floor guard ↓ 80 studs
   • CanCollide=false car + character: no physical snagging
 
   ══════════════════════════════════════════════════════════════
@@ -506,38 +516,66 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── Y COMPUTATION (V23 FIX 3 — terrain-locked) ─────────
+            -- ── Y COMPUTATION (V23b — bridge-aware, terrain-locked) ──
             -- Base: always target inside the gate trigger volume
             local targetY = gateTargetY
 
-            -- TERRAIN FLOOR: cast down 80 studs to find actual road surface.
-            -- This handles all highway elevation changes dynamically.
+            -- ① TERRAIN FLOOR — 80-stud downcast, find actual road surface.
+            --   This is the absolute floor; nothing ever overrides it.
+            local roadY    = nil
             local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -80, 0), rcParams)
             if floorRay then
-                local roadY = floorRay.Position.Y
-                -- Car must always be at least ROAD_HOVER above the actual road
+                roadY  = floorRay.Position.Y
+                -- Raise targetY so car sits ROAD_HOVER above real road
                 targetY = math.max(targetY, roadY + ROAD_HOVER)
-                -- Also prevent sinking through the road:
-                if myPos.Y - roadY < 2 then
-                    targetY = math.max(targetY, roadY + ROAD_HOVER)
+                -- Emergency catch: if already below road, snap up hard
+                if myPos.Y < roadY + 1 then
+                    targetY = roadY + ROAD_HOVER + 4
                 end
             end
 
-            -- Ceiling guard ↑ 20 studs
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 20, 0), rcParams)
+            -- ② CEILING GUARD — bridge-aware
+            --   Cast 25 studs up. If something is close, measure headroom:
+            --     headroom = ceilY - roadY  (space between road and bridge belly)
+            --   If headroom > MIN_HEADROOM: car CAN fit under → push down,
+            --     but NEVER below roadY + ROAD_HOVER (floor wins).
+            --   If headroom ≤ MIN_HEADROOM: bridge is too low to pass under →
+            --     cast further up to find bridge TOP and go OVER it instead.
+            --   MIN_HEADROOM = 10 studs (car height ~5, ROAD_HOVER 4, 1 spare)
+            local MIN_HEADROOM = 10
+            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
             if ceilHit then
-                local gap = ceilHit.Position.Y - myPos.Y
+                local ceilY    = ceilHit.Position.Y
+                local gap      = ceilY - myPos.Y
+                local headroom = roadY and (ceilY - roadY) or gap
+
                 if gap < CEIL_GAP then
-                    targetY = math.min(targetY, myPos.Y - (CEIL_GAP - gap) * 2)
+                    if headroom > MIN_HEADROOM then
+                        -- Enough room to pass under: nudge down, floor-clamped
+                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 2
+                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER) end
+                        targetY = math.min(targetY, pushDown)
+                    else
+                        -- Bridge too low to duck under → climb over it
+                        -- Cast 80 studs up to find the bridge top surface
+                        local topRay = Workspace:Raycast(
+                            Vector3.new(myPos.X, ceilY + 0.5, myPos.Z),
+                            Vector3.new(0, 80, 0), rcParams)
+                        if topRay then
+                            -- Found the top of the bridge deck; hover above it
+                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER)
+                        else
+                            -- Fallback: just go above the ceiling hit
+                            targetY = math.max(targetY, ceilY + ROAD_HOVER)
+                        end
+                    end
                 end
             end
 
-            -- Floor guard (already computed via floorRay above, reuse)
-            if floorRay then
-                local floorTop = floorRay.Position.Y
-                if myPos.Y - floorTop < FLOOR_GAP then
-                    targetY = math.max(targetY, floorTop + FLOOR_GAP + 1)
-                end
+            -- ③ ABSOLUTE FLOOR GUARANTEE — runs last, unconditionally.
+            --   Ceiling guard result can NEVER push car below road surface.
+            if roadY then
+                targetY = math.max(targetY, roadY + ROAD_HOVER)
             end
 
             -- PD controller — asymmetric gains:
@@ -1269,9 +1307,9 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V23")
-InfoRow(TabMisc, "🔧  Gate-inside Y · Punch-through · Terrain floor")
-InfoRow(TabMisc, "🎚️  PD flight controller · Road-surface raycast")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V23b")
+InfoRow(TabMisc, "🔧  Gate-inside Y · Punch-through · Bridge-aware floor")
+InfoRow(TabMisc, "🎚️  Headroom ceiling guard · Absolute floor guarantee")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
 InfoRow(TabMisc, "📋  Changelog: see script header")
 
@@ -1455,6 +1493,6 @@ end
 task.wait(0.6)
 loadGui:Destroy()
 
-print("[J23] Midnight Chasers — V23 terrain-locked + punch-through ready")
-print("[J23] gateTargetY = center + size*0.30 (inside trigger) · PivotTo at 14 studs")
-print("[J23] floor raycast 80 studs every frame · no MAX_ABOVE cap · V23")
+print("[J23b] Midnight Chasers — V23b bridge-aware ceiling guard ready")
+print("[J23b] headroom check: duck under if >10 studs clearance, else climb over")
+print("[J23b] absolute floor guarantee: ceiling CANNOT push below roadY + ROAD_HOVER")
