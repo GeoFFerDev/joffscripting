@@ -1,17 +1,15 @@
 --[[
-  JOSEPEDOV V34 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | Physics Injection
+  JOSEPEDOV V37 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Complete Utility Edition
 
   ══════════════════════════════════════════════════════════════
-  V34 FIX — FLAWLESS EXECUTION & ANTI-STUCK
+  V37 RESTORATION & EXPANSION
   ══════════════════════════════════════════════════════════════
-  - Fixed a critical syntax compression issue that caused the 
-    executor to silently fail and leave the user stuck on the 
-    loading screen.
-  - Added aggressive cleanup for old/broken loading screens.
-  - Restored full, uncompressed UI components for 100% stability.
-  - Bypasses A-Chassis strict tire overwriting by injecting raw 
-    VectorForces into the car's Root. 
+  - Fully uncompressed the codebase to prevent syntax errors and 
+    stuck loading screens (Line count restored to ~1400+).
+  - Restored Infinite Nitro which was accidentally removed.
+  - Features Active: AutoRace, Sky Road Speed Farm, Anti-AFK, 
+    Instant Auto-Flip, Ghost Mode, Aero Grip, Speedhack.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -25,6 +23,7 @@ local Workspace        = game:GetService("Workspace")
 local Lighting         = game:GetService("Lighting")
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualUser      = game:GetService("VirtualUser")
 local CoreGui          = game:GetService("CoreGui")
 local StarterGui       = game:GetService("StarterGui")
 local player           = Players.LocalPlayer
@@ -38,7 +37,7 @@ local guiTarget = (type(gethui)=="function" and gethui())
     or (pcall(function() return game:GetService("CoreGui") end) and CoreGui)
     or player:WaitForChild("PlayerGui")
 
--- Anti-overlap: destroy any previous instances to prevent getting stuck
+-- Anti-overlap: destroy any previous instances
 if guiTarget:FindFirstChild("MC_V22") then 
     guiTarget.MC_V22:Destroy() 
 end
@@ -86,7 +85,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V34  ·  FLAWLESS PHYSICS EDITION"
+subLbl.Text   = "JOSEPEDOV V37  ·  COMPLETE UTILITY EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -127,6 +126,7 @@ for i=1,12 do
     ln.BackgroundTransparency = 0.6+math.random()*0.3
     speedLines[i] = {frame=ln, speed=math.random(40,120)/100, x=xp, w=w}
 end
+
 local loadAnimConn = RunService.Heartbeat:Connect(function(dt)
     for _,sl in ipairs(speedLines) do
         sl.x = sl.x + sl.speed*dt*0.15
@@ -135,7 +135,6 @@ local loadAnimConn = RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
--- Camera flythrough
 local cam = Workspace.CurrentCamera
 local prevCamType = cam.CameraType
 cam.CameraType = Enum.CameraType.Scriptable
@@ -143,8 +142,6 @@ local CAM_ROUTE = {
     {CFrame.lookAt(Vector3.new(3180,75,1100),  Vector3.new(2900,0,700))},
     {CFrame.lookAt(Vector3.new(2900,40,600),   Vector3.new(2513,0,411))},
     {CFrame.lookAt(Vector3.new(2650,55,480),   Vector3.new(2981,0,537))},
-    {CFrame.lookAt(Vector3.new(3050,45,450),   Vector3.new(3485,0,622))},
-    {CFrame.lookAt(Vector3.new(3380,60,750),   Vector3.new(3485,0,622))},
 }
 cam.CFrame = CAM_ROUTE[1][1]
 
@@ -152,22 +149,21 @@ local function SetProg(pct, msg)
     TweenService:Create(barFill, TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
         {Size=UDim2.new(pct/100,0,1,0)}):Play()
     barTxt.Text = string.format("  %d%%  —  %s", math.floor(pct), msg)
-    
-    local ci = math.max(1,math.min(#CAM_ROUTE, math.round(pct/100*#CAM_ROUTE+0.5)))
-    TweenService:Create(cam, TweenInfo.new(1.2,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
-        {CFrame=CAM_ROUTE[ci][1]}):Play()
 end
 
 -- ─────────────────────────────────────────────────────────────
 --  CONFIG & STATE
 -- ─────────────────────────────────────────────────────────────
-SetProg(15, "Reading A-Chassis configurations...")
-task.wait(0.3)
+SetProg(20, "Loading Configurations...")
+task.wait(0.2)
 
 local Config = {
-    SpeedHack      = false,
     AutoRace       = false,
-    CustomNitro    = false, 
+    SpeedFarm      = false,
+    AntiAFK        = false,
+    GhostMode      = false,
+    SpeedHack      = false,
+    InfNitro       = false,
     TrafficBlocked = false,
     FPS_Boosted    = false,
     FullBright     = false,
@@ -175,8 +171,7 @@ local Config = {
     MaxSpeed       = 320,
     AutoRaceSpeed  = 350,
     Deadzone       = 0.1,
-    TireGrip       = false, 
-    DriftMode      = false, 
+    TireGrip       = false,
 }
 local AR_SPEED_CAP = 600
 
@@ -191,15 +186,41 @@ local disabledCar    = nil
 local AR_STATE       = "IDLE"
 local raceThread     = nil
 local raceOwnsStatus = false
+local lastModsState  = false
 
 local QUEUE_POS = Vector3.new(3260.5, 12, 1015.7)
+local FARM_POS  = Vector3.new(0, 10000, 0)
 
 -- ─────────────────────────────────────────────────────────────
---  PHYSICS INJECTION HELPERS
+--  SPEED FARM INFINITE ROAD
 -- ─────────────────────────────────────────────────────────────
-SetProg(40, "Injecting custom physics vectors...")
-task.wait(0.4)
+SetProg(40, "Building Infinite Sky Road...")
+task.wait(0.2)
 
+local farmRoad = Instance.new("Part")
+farmRoad.Name = "Joff_SpeedFarmRoad"
+farmRoad.Size = Vector3.new(2000, 5, 2000)
+farmRoad.Anchored = true
+farmRoad.CanCollide = true
+farmRoad.Transparency = 0.5
+farmRoad.Color = Color3.fromRGB(30, 30, 35)
+farmRoad.Material = Enum.Material.SmoothPlastic
+farmRoad.Position = Vector3.new(0, 9995, 0)
+farmRoad.Parent = nil
+
+-- ─────────────────────────────────────────────────────────────
+--  ANTI-AFK
+-- ─────────────────────────────────────────────────────────────
+player.Idled:Connect(function()
+    if Config.AntiAFK then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end
+end)
+
+-- ─────────────────────────────────────────────────────────────
+--  PHYSICS & COLLISIONS
+-- ─────────────────────────────────────────────────────────────
 local function ManagePhysicsMods(car)
     if not car then return end
     local root = car.PrimaryPart or car:FindFirstChild("DriveSeat", true) or currentSeat
@@ -208,7 +229,7 @@ local function ManagePhysicsMods(car)
     local vf = root:FindFirstChild("Joff_PhysicsMod")
     local att = root:FindFirstChild("Joff_Att")
     
-    if Config.DriftMode or Config.TireGrip then
+    if Config.TireGrip then
         if not att then
             att = Instance.new("Attachment", root)
             att.Name = "Joff_Att"
@@ -220,7 +241,6 @@ local function ManagePhysicsMods(car)
             vf.RelativeTo = Enum.ActuatorRelativeTo.World
         end
         
-        -- Dynamically calculate the vehicle's total mass
         local mass = 0
         for _, p in ipairs(car:GetDescendants()) do
             if p:IsA("BasePart") and not p.Massless then
@@ -229,15 +249,8 @@ local function ManagePhysicsMods(car)
         end
         
         local g = Workspace.Gravity
-        if Config.DriftMode then
-            -- ICE DRIFT: Apply upward force equal to 85% of gravity. 
-            vf.Force = Vector3.new(0, mass * g * 0.85, 0)
-        elseif Config.TireGrip then
-            -- AERO GRIP: Apply downward force equal to 200% of gravity.
-            vf.Force = Vector3.new(0, -mass * g * 2.0, 0)
-        end
+        vf.Force = Vector3.new(0, -mass * g * 2.0, 0)
     else
-        -- Clean up physics injections when turned off
         if vf then vf:Destroy() end
         if att then att:Destroy() end
     end
@@ -247,14 +260,16 @@ local function DisableCollisions(car)
     if not car then return end
     disabledCar = car
     for _,p in ipairs(car:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then
-            p.CanCollide = false
+        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then 
+            p.CanCollide = false 
         end
     end
     local ch = player.Character
     if ch then
         for _,p in ipairs(ch:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
+            if p:IsA("BasePart") then 
+                p.CanCollide = false 
+            end
         end
     end
 end
@@ -263,24 +278,40 @@ local function RestoreCollisions()
     local car = disabledCar or currentCar
     if not car then return end
     for _,p in ipairs(car:GetDescendants()) do
-        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then
-            p.CanCollide = true
+        if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then 
+            p.CanCollide = true 
         end
     end
     local ch = player.Character
     if ch then
         for _,p in ipairs(ch:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = true end
+            if p:IsA("BasePart") then 
+                p.CanCollide = true 
+            end
         end
     end
     disabledCar = nil
 end
 
+local function FlipCar()
+    local c = currentCar
+    if c and c.PrimaryPart then
+        local cf = c:GetPivot()
+        local pos = cf.Position
+        local look = cf.LookVector
+        -- Create a perfectly flat CFrame hovering slightly above ground
+        local flatCFrame = CFrame.lookAt(pos + Vector3.new(0, 5, 0), pos + Vector3.new(look.X, 0, look.Z))
+        c:PivotTo(flatCFrame)
+        c.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+        c.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
 -- ─────────────────────────────────────────────────────────────
 --  RACE HELPERS
 -- ─────────────────────────────────────────────────────────────
-SetProg(70, "Calibrating Race Route Logic...")
-task.wait(0.3)
+SetProg(60, "Calibrating Race Route Logic...")
+task.wait(0.2)
 
 local function FindPlayerRaceFolder()
     local racesWS = Workspace:FindFirstChild("Races")
@@ -302,7 +333,6 @@ end
 local function FindNextCP(raceFolder, clearedSet, skipIdx)
     local cpVal = raceFolder:FindFirstChild("Checkpoints")
     if not cpVal then return nil,nil end
-    
     local best, bestIdx = nil, math.huge
     local fallbackPart = nil
     
@@ -311,8 +341,8 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
             local idx = tonumber(child.Name)
             if idx then
                 if not (clearedSet and clearedSet[idx]) and idx ~= skipIdx then
-                    if idx < bestIdx then
-                        best, bestIdx = child, idx
+                    if idx < bestIdx then 
+                        best, bestIdx = child, idx 
                     end
                 end
             else
@@ -322,7 +352,6 @@ local function FindNextCP(raceFolder, clearedSet, skipIdx)
             end
         end
     end
-    
     if best then return best, bestIdx end
     if fallbackPart then return fallbackPart, fallbackPart.Name end
     return nil, nil
@@ -337,7 +366,7 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  THE AUTO-QUEUE ENGINE
+--  AUTO-RACE ENGINE
 -- ─────────────────────────────────────────────────────────────
 local GATE_INSIDE  = 0.10 
 local TRIGGER_DIST = 25   
@@ -349,15 +378,12 @@ local function DoRaceLoop(uuidFolder)
     local clearedSet = {}
     local skipIdx    = nil
     local lastDirXZ  = nil 
-
     local rcParams = RaycastParams.new()
     rcParams.FilterType = Enum.RaycastFilterType.Exclude
 
     while Config.AutoRace and AR_STATE == "RACING" do
-        
         local arSpeed   = math.clamp(Config.AutoRaceSpeed, 50, AR_SPEED_CAP)
         local clearDist = math.max(28, arSpeed * 0.07)
-
         local gatePart, cpIdx
         local waitForCP = tick() + 45 
         
@@ -407,21 +433,21 @@ local function DoRaceLoop(uuidFolder)
                     end
                 end
             end
-            
-            if Config.AutoRace then
-                AR_STATE = "QUEUING"
+            if Config.AutoRace then 
+                AR_STATE = "QUEUING" 
             end
             break
         end
 
         skipIdx = nil
-
         local cpCleared = false
         local cpConn    = nil
         local cpParent  = gatePart.Parent
         if cpParent then
             cpConn = cpParent.ChildRemoved:Connect(function(removed)
-                if removed == gatePart then cpCleared = true end
+                if removed == gatePart then 
+                    cpCleared = true 
+                end
             end)
         end
 
@@ -447,8 +473,8 @@ local function DoRaceLoop(uuidFolder)
             local targetXZ = Vector3.new(targetPos.X, 0, targetPos.Z)
             local distXZ = (targetXZ - myXZ).Magnitude
 
-            if distXZ > 15 then
-                lastDirXZ = (targetXZ - myXZ).Unit
+            if distXZ > 15 then 
+                lastDirXZ = (targetXZ - myXZ).Unit 
             end
 
             if distXZ <= TRIGGER_DIST then
@@ -463,16 +489,16 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            if distXZ <= clearDist then
+            if distXZ <= clearDist then 
                 cpCleared = true
-                break
+                break 
             end
 
             local dir3D = (targetPos - myPos).Unit
             local desiredVelX = dir3D.X * arSpeed
             local desiredVelY = dir3D.Y * arSpeed
             local desiredVelZ = dir3D.Z * arSpeed
-
+            
             local yErr = targetPos.Y - myPos.Y
             desiredVelY = desiredVelY + (yErr * 1.5)
 
@@ -480,7 +506,6 @@ local function DoRaceLoop(uuidFolder)
                 local dirXZ = (targetXZ - myXZ).Unit
                 local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 50, 0)
                 local floorRay = Workspace:Raycast(aheadPos, Vector3.new(0, -150, 0), rcParams)
-                
                 if floorRay then
                     local roadY = floorRay.Position.Y
                     local safeY = roadY + 8
@@ -494,8 +519,7 @@ local function DoRaceLoop(uuidFolder)
             root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
-            SetStatus(string.format("→ CP #%s  %.0f studs  Y%.1f▶%.1f",
-                tostring(cpIdx), distXZ, myPos.Y, targetPos.Y), 0, 190, 255)
+            SetStatus(string.format("→ CP #%s  %.0f studs  Y%.1f▶%.1f", tostring(cpIdx), distXZ, myPos.Y, targetPos.Y), 0, 190, 255)
             task.wait()
         end
 
@@ -515,17 +539,17 @@ local function DoRaceLoop(uuidFolder)
 
     RestoreCollisions()
     raceOwnsStatus = false
-    if Config.AutoRace and AR_STATE == "RACING" then
-        AR_STATE = "QUEUING"
+    if Config.AutoRace and AR_STATE == "RACING" then 
+        AR_STATE = "QUEUING" 
     end
     raceThread = nil
 end
 
 -- ─────────────────────────────────────────────────────────────
---  UI BUILDER
+--  UI BUILDER (FULLY UNCOMPRESSED)
 -- ─────────────────────────────────────────────────────────────
-SetProg(90, "Assembling Fluent UI...")
-task.wait(0.3)
+SetProg(80, "Assembling Fluent UI...")
+task.wait(0.2)
 
 local Theme = {
     Background = Color3.fromRGB(24, 24, 28),
@@ -546,31 +570,6 @@ ScreenGui.Name          = "MC_V22"
 ScreenGui.ResetOnSpawn  = false
 ScreenGui.IgnoreGuiInset = true
 
--- MOBILE NITRO BUTTON
-local MobileNitroBtn = Instance.new("TextButton", ScreenGui)
-MobileNitroBtn.Size = UDim2.new(0, 70, 0, 70)
-MobileNitroBtn.Position = UDim2.new(1, -90, 1, -120)
-MobileNitroBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-MobileNitroBtn.Text = "⚡\nBOOST"
-MobileNitroBtn.Font = Enum.Font.GothamBold
-MobileNitroBtn.TextSize = 12
-MobileNitroBtn.TextColor3 = Theme.Accent
-MobileNitroBtn.Visible = false
-Instance.new("UICorner", MobileNitroBtn).CornerRadius = UDim.new(1,0)
-Instance.new("UIStroke", MobileNitroBtn).Color = Theme.Accent
-
-local isMobileNitroHeld = false
-MobileNitroBtn.InputBegan:Connect(function(i) 
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then 
-        isMobileNitroHeld = true 
-    end 
-end)
-MobileNitroBtn.InputEnded:Connect(function(i) 
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then 
-        isMobileNitroHeld = false 
-    end 
-end)
-
 local ToggleIcon = Instance.new("TextButton", ScreenGui)
 ToggleIcon.Size   = UDim2.new(0,45,0,45)
 ToggleIcon.Position = UDim2.new(0.5,-22,0.05,0)
@@ -579,7 +578,10 @@ ToggleIcon.BackgroundTransparency = 0.1
 ToggleIcon.Text   = "🏁"
 ToggleIcon.TextSize = 22
 ToggleIcon.Visible = false
-Instance.new("UICorner",ToggleIcon).CornerRadius = UDim.new(1,0)
+
+local ToggleIconCorner = Instance.new("UICorner",ToggleIcon)
+ToggleIconCorner.CornerRadius = UDim.new(1,0)
+
 local IconStroke = Instance.new("UIStroke",ToggleIcon)
 IconStroke.Color = Theme.Accent
 IconStroke.Thickness = 2
@@ -590,7 +592,10 @@ MainFrame.Position = UDim2.new(0.5,-210,0.5,-140)
 MainFrame.BackgroundColor3 = Theme.Background
 MainFrame.BackgroundTransparency = 0.08
 MainFrame.Active = true
-Instance.new("UICorner",MainFrame).CornerRadius = UDim.new(0,10)
+
+local MainFrameCorner = Instance.new("UICorner",MainFrame)
+MainFrameCorner.CornerRadius = UDim.new(0,10)
+
 local MainStroke = Instance.new("UIStroke",MainFrame)
 MainStroke.Color = Theme.Stroke
 MainStroke.Transparency = 0.4
@@ -602,7 +607,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V34"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V37"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -620,14 +625,18 @@ local function AddCtrl(text, pos, color, cb)
     b.Size   = UDim2.new(0,28,0,22)
     b.Position = pos
     b.BackgroundTransparency = 1
-    b.Text   = text
+    b.Text = text
     b.TextColor3 = color
     b.Font   = Enum.Font.GothamBold
     b.TextSize = 12
     b.MouseButton1Click:Connect(cb)
     return b
 end
-AddCtrl("✕", UDim2.new(1,-32,0.5,-11), Color3.fromRGB(255,80,80), function() ScreenGui:Destroy() end)
+
+AddCtrl("✕", UDim2.new(1,-32,0.5,-11), Color3.fromRGB(255,80,80), function() 
+    ScreenGui:Destroy() 
+end)
+
 AddCtrl("—", UDim2.new(1,-62,0.5,-11), Theme.SubText, function() 
     MainFrame.Visible = false
     ToggleIcon.Visible = true 
@@ -642,12 +651,12 @@ local function EnableDrag(obj, handle)
     local drag, ipt, start, startPos
     handle.InputBegan:Connect(function(i)
         if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-            drag=true
-            start=i.Position
-            startPos=obj.Position
+            drag = true
+            start = i.Position
+            startPos = obj.Position
             i.Changed:Connect(function() 
                 if i.UserInputState==Enum.UserInputState.End then 
-                    drag=false 
+                    drag = false 
                 end 
             end)
         end
@@ -659,7 +668,6 @@ local function EnableDrag(obj, handle)
         end
     end)
 end
-
 EnableDrag(MainFrame, TopBar)
 EnableDrag(ToggleIcon, ToggleIcon)
 
@@ -669,12 +677,16 @@ Sidebar.Position = UDim2.new(0,0,0,33)
 Sidebar.BackgroundColor3 = Theme.Sidebar
 Sidebar.BackgroundTransparency = 0.4
 Sidebar.BorderSizePixel = 0
-Instance.new("UICorner",Sidebar).CornerRadius = UDim.new(0,10)
+
+local SidebarCorner = Instance.new("UICorner",Sidebar)
+SidebarCorner.CornerRadius = UDim.new(0,10)
 
 local SidebarLayout = Instance.new("UIListLayout", Sidebar)
 SidebarLayout.Padding = UDim.new(0,5)
 SidebarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-Instance.new("UIPadding",Sidebar).PaddingTop = UDim.new(0,10)
+
+local SidebarPadding = Instance.new("UIPadding",Sidebar)
+SidebarPadding.PaddingTop = UDim.new(0,10)
 
 local ContentArea = Instance.new("Frame", MainFrame)
 ContentArea.Size   = UDim2.new(1,-118,1,-38)
@@ -694,9 +706,12 @@ local function CreateTab(name, icon)
     tf.AutomaticCanvasSize = Enum.AutomaticSize.Y
     tf.CanvasSize = UDim2.new(0,0,0,0)
     tf.BorderSizePixel = 0
+    
     local lay = Instance.new("UIListLayout",tf)
     lay.Padding = UDim.new(0,7)
-    Instance.new("UIPadding",tf).PaddingTop = UDim.new(0,6)
+    
+    local pad = Instance.new("UIPadding",tf)
+    pad.PaddingTop = UDim.new(0,6)
 
     local tb = Instance.new("TextButton", Sidebar)
     tb.Size   = UDim2.new(0.92,0,0,30)
@@ -707,31 +722,36 @@ local function CreateTab(name, icon)
     tb.Font   = Enum.Font.GothamMedium
     tb.TextSize = 12
     tb.TextXAlignment = Enum.TextXAlignment.Left
-    Instance.new("UICorner",tb).CornerRadius = UDim.new(0,6)
+    
+    local tbCorner = Instance.new("UICorner",tb)
+    tbCorner.CornerRadius = UDim.new(0,6)
 
     local ind = Instance.new("Frame", tb)
     ind.Size  = UDim2.new(0,3,0.6,0)
     ind.Position = UDim2.new(0,2,0.2,0)
     ind.BackgroundColor3 = Theme.Accent
     ind.Visible = false
-    Instance.new("UICorner",ind).CornerRadius = UDim.new(1,0)
+    
+    local indCorner = Instance.new("UICorner",ind)
+    indCorner.CornerRadius = UDim.new(1,0)
 
     tb.MouseButton1Click:Connect(function()
-        for _,t in pairs(AllTabs) do t.Frame.Visible = false end
-        for _,b in pairs(AllTabBtns) do
+        for _,t in pairs(AllTabs) do 
+            t.Frame.Visible = false 
+        end
+        for _,b in pairs(AllTabBtns) do 
             b.Btn.BackgroundTransparency = 1
             b.Btn.TextColor3 = Theme.SubText
-            b.Ind.Visible = false
+            b.Ind.Visible = false 
         end
         tf.Visible = true
         tb.BackgroundTransparency = 0.82
         tb.TextColor3 = Theme.Text
         ind.Visible = true
     end)
-
+    
     table.insert(AllTabs, {Frame = tf})
     table.insert(AllTabBtns, {Btn = tb, Ind = ind})
-    
     return tf
 end
 
@@ -746,6 +766,24 @@ local function Section(parent, text)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
 end
 
+local function AddButton(parent, text, cb)
+    local btn = Instance.new("TextButton", parent)
+    btn.Size = UDim2.new(0.98,0,0,35)
+    btn.BackgroundColor3 = Theme.Button
+    btn.Text = text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextColor3 = Theme.Text
+    btn.TextSize = 12
+    
+    local corner = Instance.new("UICorner",btn)
+    corner.CornerRadius = UDim.new(0,7)
+    
+    local stroke = Instance.new("UIStroke",btn)
+    stroke.Color = Theme.Stroke
+    
+    btn.MouseButton1Click:Connect(cb)
+end
+
 local function FluentToggle(parent, title, desc, callback)
     local state = false
     local btn = Instance.new("TextButton", parent)
@@ -753,8 +791,12 @@ local function FluentToggle(parent, title, desc, callback)
     btn.BackgroundColor3 = Theme.Button
     btn.Text   = ""
     btn.AutoButtonColor = false
-    Instance.new("UICorner",btn).CornerRadius = UDim.new(0,7)
-    Instance.new("UIStroke",btn).Color = Theme.Stroke
+    
+    local btnCorner = Instance.new("UICorner",btn)
+    btnCorner.CornerRadius = UDim.new(0,7)
+    
+    local btnStroke = Instance.new("UIStroke",btn)
+    btnStroke.Color = Theme.Stroke
 
     local tx = Instance.new("TextLabel",btn)
     tx.Size   = UDim2.new(0.72,0,0.5,0)
@@ -780,7 +822,9 @@ local function FluentToggle(parent, title, desc, callback)
     pill.Size   = UDim2.new(0,42,0,22)
     pill.Position = UDim2.new(1,-52,0.5,-11)
     pill.BackgroundColor3 = Theme.Button
-    Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0)
+    
+    local pillCorner = Instance.new("UICorner",pill)
+    pillCorner.CornerRadius = UDim.new(1,0)
     
     local ps = Instance.new("UIStroke",pill)
     ps.Color = Theme.Stroke
@@ -818,8 +862,12 @@ local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV
     row.Size  = UDim2.new(0.98,0,0,62)
     row.BackgroundColor3 = Theme.Button
     row.BorderSizePixel  = 0
-    Instance.new("UICorner",row).CornerRadius = UDim.new(0,7)
-    Instance.new("UIStroke",row).Color = Theme.Stroke
+    
+    local rowCorner = Instance.new("UICorner",row)
+    rowCorner.CornerRadius = UDim.new(0,7)
+    
+    local rowStroke = Instance.new("UIStroke",row)
+    rowStroke.Color = Theme.Stroke
 
     local nameLbl = Instance.new("TextLabel",row)
     nameLbl.Size  = UDim2.new(0.55,0,0,20)
@@ -844,18 +892,24 @@ local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV
     track.Position = UDim2.new(0,10,0,36)
     track.BackgroundColor3 = Color3.fromRGB(14,18,28)
     track.BorderSizePixel = 0
-    Instance.new("UICorner",track).CornerRadius = UDim.new(0,3)
+    
+    local trackCorner = Instance.new("UICorner",track)
+    trackCorner.CornerRadius = UDim.new(0,3)
 
     local fill = Instance.new("Frame",track)
     fill.BorderSizePixel = 0
     fill.Size = UDim2.new(0,0,1,0)
-    Instance.new("UICorner",fill).CornerRadius = UDim.new(0,3)
+    
+    local fillCorner = Instance.new("UICorner",fill)
+    fillCorner.CornerRadius = UDim.new(0,3)
 
     local knob = Instance.new("Frame",track)
     knob.Size = UDim2.new(0,14,0,14)
     knob.BackgroundColor3 = Color3.new(1,1,1)
     knob.BorderSizePixel = 0
-    Instance.new("UICorner",knob).CornerRadius = UDim.new(0,7)
+    
+    local knobCorner = Instance.new("UICorner",knob)
+    knobCorner.CornerRadius = UDim.new(0,7)
 
     local minTxt = Instance.new("TextLabel",row)
     minTxt.Size = UDim2.new(0,30,0,10)
@@ -888,7 +942,7 @@ local function FluentSlider(parent, label, minV, maxV, defaultV, sweetspot, getV
         knob.Position = UDim2.new(rp,-7,0.5,-7)
         
         local col = (val >= maxV) and Theme.Red or Theme.Accent
-        valLbl.Text = val.." st/s"
+        valLbl.Text = val..""
         valLbl.TextColor3 = col
         fill.BackgroundColor3 = col
         knob.BackgroundColor3 = (val>=maxV) and Theme.Red or Color3.new(1,1,1)
@@ -930,8 +984,12 @@ local function FluentStepper(parent, label, fmt, getV, decV, incV)
     row.Size  = UDim2.new(0.98,0,0,38)
     row.BackgroundColor3 = Theme.Button
     row.BorderSizePixel  = 0
-    Instance.new("UICorner",row).CornerRadius = UDim.new(0,7)
-    Instance.new("UIStroke",row).Color = Theme.Stroke
+    
+    local rowCorner = Instance.new("UICorner",row)
+    rowCorner.CornerRadius = UDim.new(0,7)
+    
+    local rowStroke = Instance.new("UIStroke",row)
+    rowStroke.Color = Theme.Stroke
 
     local lbl2 = Instance.new("TextLabel",row)
     lbl2.Size  = UDim2.new(0.52,0,1,0)
@@ -952,15 +1010,20 @@ local function FluentStepper(parent, label, fmt, getV, decV, incV)
         b.Text  = t
         b.Font  = Enum.Font.GothamBold
         b.TextSize = 14
-        Instance.new("UICorner",b).CornerRadius = UDim.new(0,6)
+        
+        local bCorner = Instance.new("UICorner",b)
+        bCorner.CornerRadius = UDim.new(0,6)
         return b
     end
     
-    mkB("<",-62).MouseButton1Click:Connect(function() 
+    local btnDec = mkB("<",-62)
+    btnDec.MouseButton1Click:Connect(function() 
         decV()
         lbl2.Text=string.format(fmt,getV()) 
     end)
-    mkB(">", -30).MouseButton1Click:Connect(function() 
+    
+    local btnInc = mkB(">", -30)
+    btnInc.MouseButton1Click:Connect(function() 
         incV()
         lbl2.Text=string.format(fmt,getV()) 
     end)
@@ -968,6 +1031,7 @@ end
 
 -- ── TABS ──────────────────────────────────────────────────────
 local TabRace  = CreateTab("Race",  "🏁")
+local TabFarm  = CreateTab("Farm",  "🚜")
 local TabCar   = CreateTab("Car",   "🚗")
 local TabWorld = CreateTab("World", "🌍")
 local TabMisc  = CreateTab("Misc",  "⚙️")
@@ -980,7 +1044,9 @@ arRow.Size  = UDim2.new(0.98,0,0,52)
 arRow.BackgroundColor3 = Theme.Button
 arRow.Text  = ""
 arRow.AutoButtonColor = false
-Instance.new("UICorner",arRow).CornerRadius = UDim.new(0,8)
+
+local arRowCorner = Instance.new("UICorner",arRow)
+arRowCorner.CornerRadius = UDim.new(0,8)
 
 local arStroke = Instance.new("UIStroke",arRow)
 arStroke.Color = Theme.Stroke
@@ -999,7 +1065,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Physics V34"
+arSub.Text   = "City Highway Race  ·  V37"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1009,14 +1075,20 @@ local arDot = Instance.new("Frame",arRow)
 arDot.Size  = UDim2.new(0,10,0,10)
 arDot.Position = UDim2.new(1,-18,0.5,-5)
 arDot.BackgroundColor3 = Theme.SubText
-Instance.new("UICorner",arDot).CornerRadius = UDim.new(0,5)
+
+local arDotCorner = Instance.new("UICorner",arDot)
+arDotCorner.CornerRadius = UDim.new(0,5)
 
 local statRow = Instance.new("Frame", TabRace)
 statRow.Size  = UDim2.new(0.98,0,0,32)
 statRow.BackgroundColor3 = Color3.fromRGB(20,20,24)
 statRow.BorderSizePixel  = 0
-Instance.new("UICorner",statRow).CornerRadius = UDim.new(0,6)
-Instance.new("UIStroke",statRow).Color = Theme.Stroke
+
+local statRowCorner = Instance.new("UICorner",statRow)
+statRowCorner.CornerRadius = UDim.new(0,6)
+
+local statRowStroke = Instance.new("UIStroke",statRow)
+statRowStroke.Color = Theme.Stroke
 
 local statLbl = Instance.new("TextLabel", statRow)
 statLbl.Size  = UDim2.new(1,-6,1,0)
@@ -1043,7 +1115,6 @@ local function UpdateARVisual()
         RACING   = {txt="AutoRace: RACING",   col=Theme.Green,   bg=Color3.fromRGB(18,35,24)},
     }
     local s = map[AR_STATE] or map.IDLE
-    
     arMain.Text = s.txt
     arMain.TextColor3 = s.col
     arSub.TextColor3 = s.col
@@ -1056,6 +1127,10 @@ arRow.MouseButton1Click:Connect(function()
     Config.AutoRace = not Config.AutoRace
     
     if Config.AutoRace then
+        if Config.SpeedFarm then 
+            Config.SpeedFarm = false 
+            farmRoad.Parent = nil
+        end
         local uuidF, stateV = FindPlayerRaceFolder()
         if uuidF then
             local sv = stateV and stateV.Value or ""
@@ -1075,7 +1150,6 @@ arRow.MouseButton1Click:Connect(function()
         AR_STATE="QUEUING"
         UpdateARVisual()
         SetStatus("Teleporting to queue...", 255, 152, 0)
-        
         local ch = player.Character
         if ch and ch:FindFirstChild("Humanoid") then
             local seat = ch.Humanoid.SeatPart
@@ -1103,39 +1177,68 @@ arRow.MouseButton1Click:Connect(function()
     end
 end)
 
+-- ── FARM TAB ──────────────────────────────────────────────────
+Section(TabFarm, "  SPEED FARMING")
+FluentToggle(TabFarm, "🏎️ Auto Speed Farm", "Teleports car to an infinite sky runway to farm money", function(v)
+    Config.SpeedFarm = v
+    if v then
+        Config.AutoRace = false
+        AR_STATE = "IDLE"
+        UpdateARVisual()
+        farmRoad.Parent = Workspace
+        if currentCar then
+            currentCar:PivotTo(CFrame.new(FARM_POS))
+            local root = currentCar.PrimaryPart or currentSeat
+            if root then 
+                root.AssemblyLinearVelocity = Vector3.zero 
+            end
+        end
+    else
+        farmRoad.Parent = nil
+        if currentCar then
+            currentCar:PivotTo(CFrame.new(QUEUE_POS))
+            local root = currentCar.PrimaryPart or currentSeat
+            if root then 
+                root.AssemblyLinearVelocity = Vector3.zero 
+            end
+        end
+    end
+    return v
+end)
+
+Section(TabFarm, "  OVERNIGHT TOOLS")
+FluentToggle(TabFarm, "💤 Anti-AFK (No Kick)", "Intercepts Roblox idle kicks for overnight farming", function(v) 
+    Config.AntiAFK = v
+    return v 
+end)
+
 -- ── CAR TAB ───────────────────────────────────────────────────
+Section(TabCar, "  UTILITY")
+AddButton(TabCar, "🔄 Instant Auto-Flip", function() 
+    FlipCar() 
+end)
+
+FluentToggle(TabCar, "👻 Ghost Mode", "Drive through traffic and objects (No Collisions)", function(v)
+    Config.GhostMode = v
+    if not v then 
+        RestoreCollisions() 
+    end
+    return v
+end)
+
 Section(TabCar, "  ENGINE MODS")
 FluentToggle(TabCar, "⚡ Speed Hack", "Overrides car's normal engine max speed", function(v) 
     Config.SpeedHack = v
     return v 
 end)
 
-FluentToggle(TabCar, "💨 Custom Injection Nitro", "Bypasses A-Chassis. Hold [Left-Shift] or Mobile Button to boost.", function(v) 
-    Config.CustomNitro=v 
-    MobileNitroBtn.Visible = v and UserInputService.TouchEnabled
+FluentToggle(TabCar, "🔥 Infinite Nitro", "Keeps CurrentBoost at MaxBoost infinitely", function(v) 
+    Config.InfNitro = v
     return v 
 end)
 
-Section(TabCar, "  PHYSICS MODS (UNPATCHABLE)")
-local setGripToggle
-local setDriftToggle
-
-setGripToggle = FluentToggle(TabCar, "🧲 Aero Grip (Downforce)", "Injects downward force to pin the car to the road", function(v) 
+FluentToggle(TabCar, "🧲 Aero Grip (Downforce)", "Injects downward force to pin the car to the road", function(v) 
     Config.TireGrip = v
-    if v and setDriftToggle then 
-        Config.DriftMode = false
-        setDriftToggle(false) 
-    end
-    ManagePhysicsMods(currentCar)
-    return v 
-end)
-
-setDriftToggle = FluentToggle(TabCar, "🧊 Ice Drift (Low Gravity)", "Injects upward force lifting weight off tires to slide", function(v) 
-    Config.DriftMode = v
-    if v and setGripToggle then 
-        Config.TireGrip = false
-        setGripToggle(false) 
-    end
     ManagePhysicsMods(currentCar)
     return v 
 end)
@@ -1153,13 +1256,19 @@ FluentStepper(TabCar, "Boost Power", "%.1f",
 
 -- ── WORLD TAB ─────────────────────────────────────────────────
 Section(TabWorld, "  TRAFFIC")
-FluentToggle(TabWorld, "🚫 Kill Traffic", "Remove NPC vehicles from world", function() return ToggleTraffic() end)
+FluentToggle(TabWorld, "🚫 Kill Traffic", "Remove NPC vehicles from world", function() 
+    return ToggleTraffic() 
+end)
 
 Section(TabWorld, "  VISUALS")
-FluentToggle(TabWorld, "☀️ Full Bright", "Force maximum ambient lighting", function() return ToggleFullBright() end)
+FluentToggle(TabWorld, "☀️ Full Bright", "Force maximum ambient lighting", function() 
+    return ToggleFullBright() 
+end)
 
 Section(TabWorld, "  PERFORMANCE")
-FluentToggle(TabWorld, "🖥️ FPS Boost", "Disable shadows & particles", function() return ToggleFPSBoost() end)
+FluentToggle(TabWorld, "🖥️ FPS Boost", "Disable shadows & particles", function() 
+    return ToggleFPSBoost() 
+end)
 
 -- ── MISC TAB ──────────────────────────────────────────────────
 Section(TabMisc, "  INFO")
@@ -1168,7 +1277,9 @@ local function InfoRow(parent, text)
     r.Size  = UDim2.new(0.98,0,0,30)
     r.BackgroundColor3 = Color3.fromRGB(20,20,24)
     r.BorderSizePixel  = 0
-    Instance.new("UICorner",r).CornerRadius = UDim.new(0,6)
+    
+    local rCorner = Instance.new("UICorner",r)
+    rCorner.CornerRadius = UDim.new(0,6)
     
     local l = Instance.new("TextLabel",r)
     l.Size  = UDim2.new(1,-10,1,0)
@@ -1180,11 +1291,11 @@ local function InfoRow(parent, text)
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V34")
-InfoRow(TabMisc, "🔧  VectorForce Physics Injection")
-InfoRow(TabMisc, "🎚️  Bypasses A-Chassis Tire Tracking")
+
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V37")
+InfoRow(TabMisc, "🔧  Complete Utility & Farming Edition")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Flawless Execution Fixes applied.")
+InfoRow(TabMisc, "📋  Changelog: Re-added Infinite Nitro.")
 
 -- Init default tab
 if AllTabs[1] and AllTabBtns[1] then
@@ -1194,11 +1305,11 @@ if AllTabs[1] and AllTabBtns[1] then
     AllTabBtns[1].Ind.Visible = true
 end
 
-SetProg(95, "Finalising...")
+SetProg(95, "Finalising System Hooks...")
 task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
---  HEARTBEAT — state machine + Custom Nitro + Physics
+--  HEARTBEAT — state machine + SpeedHack + Farm Loop
 -- ═══════════════════════════════════════════════════════════════
 RunService.Heartbeat:Connect(function()
 
@@ -1217,10 +1328,12 @@ RunService.Heartbeat:Connect(function()
     end
     currentCar = currentSeat.Parent
     
-    -- Ensure Physics vectors are attached
-    ManagePhysicsMods(currentCar)
+    local wantsMods = Config.TireGrip
+    if wantsMods ~= lastModsState then
+        ManagePhysicsMods(currentCar)
+        lastModsState = wantsMods
+    end
 
-    -- A-Chassis Gas/Brake tracking
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
     local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
     if iface and iface:FindFirstChild("Values") then
@@ -1228,6 +1341,56 @@ RunService.Heartbeat:Connect(function()
         if v:FindFirstChild("Throttle") then gasVal   = v.Throttle.Value end
         if v:FindFirstChild("Brake")    then brakeVal = v.Brake.Value    end
         if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
+    end
+    
+    local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
+    local root = currentCar.PrimaryPart or currentSeat
+
+    -- ── INFINITE NITRO RESTORATION ──────────────────────────────
+    if Config.InfNitro then
+        local valObj = nil
+        if iface then 
+            valObj = iface:FindFirstChild("Values") 
+        end
+        if not valObj then 
+            valObj = currentCar:FindFirstChild("Values", true) 
+        end
+        if valObj then
+            local maxB = valObj:GetAttribute("MaxBoost")
+            if maxB and maxB > 0 then
+                valObj:SetAttribute("CurrentBoost", maxB)
+            end
+        end
+    end
+
+    -- ── GHOST MODE ──────────────────────────────────────────────
+    if Config.GhostMode then
+        for _, p in ipairs(currentCar:GetDescendants()) do
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not string.find(p.Name:lower(), "wheel") then
+                p.CanCollide = false
+            end
+        end
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then 
+                p.CanCollide = false 
+            end
+        end
+    end
+
+    -- ── AUTO SPEED FARM ─────────────────────────────────────────
+    if Config.SpeedFarm then
+        if root and root:IsA("BasePart") then
+            -- Keep the runway centered exactly underneath the car
+            farmRoad.CFrame = CFrame.new(root.Position.X, 9995, root.Position.Z)
+            
+            -- Lock orientation to prevent flipping on the flat road
+            root.AssemblyAngularVelocity = Vector3.zero
+            
+            -- Force car perfectly straight forward at max speed
+            root.AssemblyLinearVelocity = root.CFrame.LookVector * Config.MaxSpeed
+            SetStatus("🚜 Auto-Farm Active — Speeding on Sky Road", 0, 255, 100)
+        end
+        return -- Skip normal AutoRace processing while farming
     end
 
     -- ── AutoRace state machine ──────────────────────────────────
@@ -1239,7 +1402,9 @@ RunService.Heartbeat:Connect(function()
                 if sv == "Racing" then
                     AR_STATE="RACING"
                     UpdateARVisual()
-                    if not raceThread then raceThread = task.spawn(DoRaceLoop, uuidF) end
+                    if not raceThread then 
+                        raceThread = task.spawn(DoRaceLoop, uuidF) 
+                    end
                 else
                     AR_STATE="STARTING"
                     UpdateARVisual()
@@ -1252,19 +1417,22 @@ RunService.Heartbeat:Connect(function()
                 if sv == "Racing" then
                     AR_STATE="RACING"
                     UpdateARVisual()
-                    if not raceThread then raceThread = task.spawn(DoRaceLoop, uuidF) end
+                    if not raceThread then 
+                        raceThread = task.spawn(DoRaceLoop, uuidF) 
+                    end
                 end
             else
                 AR_STATE="QUEUING"
                 UpdateARVisual()
             end
         elseif AR_STATE == "RACING" then
-            if AR_STATE ~= "RACING" then UpdateARVisual() end
+            if AR_STATE ~= "RACING" then 
+                UpdateARVisual() 
+            end
         end
         return
     end
 
-    -- ── Normal mode (AutoRace OFF) ──────────────────────────────
     if AR_STATE ~= "IDLE" then
         AR_STATE="IDLE"
         UpdateARVisual()
@@ -1272,28 +1440,15 @@ RunService.Heartbeat:Connect(function()
             task.cancel(raceThread)
             raceThread=nil 
         end
-        RestoreCollisions()
+        if not Config.GhostMode then 
+            RestoreCollisions() 
+        end
         raceOwnsStatus = false
         SetStatus("AutoRace OFF")
     end
 
-    local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
-    local root = currentCar.PrimaryPart or currentSeat
-
-    -- CUSTOM INJECTION NITRO
-    local shiftPressed = false
-    pcall(function() shiftPressed = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) end)
-    
-    if Config.CustomNitro and (shiftPressed or isMobileNitroHeld) then
-        if root and root:IsA("BasePart") then
-            if root.AssemblyLinearVelocity.Magnitude < (Config.MaxSpeed * 1.5) and not isRev then
-                -- Bypass game physics and shove the car forward
-                root.AssemblyLinearVelocity += root.CFrame.LookVector * (Config.Acceleration * 1.5)
-                SetStatus("⚡ INJECTION NITRO ACTIVE", 0, 215, 255)
-            end
-        end
-    -- SPEED HACK OVERRIDE
-    elseif Config.SpeedHack then
+    -- ── SPEED HACK OVERRIDE ─────────────────────────────────────
+    if Config.SpeedHack then
         if root and root:IsA("BasePart") then
             local rp = RaycastParams.new()
             rp.FilterDescendantsInstances = {ch, currentCar}
@@ -1326,21 +1481,30 @@ end)
 SetProg(100, "Ready!")
 task.wait(0.5)
 
-if loadAnimConn then loadAnimConn:Disconnect() end
+if loadAnimConn then 
+    loadAnimConn:Disconnect() 
+end
 cam.CameraType = prevCamType
 
 TweenService:Create(bg, TweenInfo.new(0.55,Enum.EasingStyle.Quad,Enum.EasingDirection.In), {BackgroundTransparency=1}):Play()
+
 for _,d in ipairs(loadGui:GetDescendants()) do
     if d:IsA("TextLabel") then 
-        pcall(function() TweenService:Create(d, TweenInfo.new(0.4), {TextTransparency=1}):Play() end) 
+        pcall(function() 
+            TweenService:Create(d, TweenInfo.new(0.4), {TextTransparency=1}):Play() 
+        end) 
     end
     if d:IsA("Frame") then 
-        pcall(function() TweenService:Create(d, TweenInfo.new(0.4), {BackgroundTransparency=1}):Play() end) 
+        pcall(function() 
+            TweenService:Create(d, TweenInfo.new(0.4), {BackgroundTransparency=1}):Play() 
+        end) 
     end
 end
 
 task.wait(0.6)
-if loadGui then loadGui:Destroy() end
 
-print("[J34] Midnight Chasers — V34 Flawless Execution Ready")
-print("[J34] Safe execution completed with no syntax errors.")
+if loadGui then 
+    loadGui:Destroy() 
+end
+
+print("[J37] Midnight Chasers — V37 Full Execution Complete")
