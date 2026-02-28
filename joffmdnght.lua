@@ -1,15 +1,14 @@
 --[[
-  JOSEPEDOV V38 — MIDNIGHT CHASERS
-  Highway AutoRace exploit | Fluent UI | The Polish Edition
+  JOSEPEDOV V39 — MIDNIGHT CHASERS
+  Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
-  V38 RESTORATION 
+  V39 FIXES & ADDITIONS
   ══════════════════════════════════════════════════════════════
-  - Restored the missing Loading Screen UI Prints (The route dots 
-    and labels now correctly light up green as the script loads).
-  - Restored F9 Developer Console prints.
-  - Maintains all V37 features: AutoRace, Speed Farm, Anti-AFK, 
-    Ghost Mode, Auto-Flip, Aero Grip, Inf Nitro, and Speed Hack.
+  - Restored missing World functions (Traffic/FPS/FullBright).
+  - Added dedicated "Farm Cruising Speed" slider to the Farm Tab.
+  - Safe-wrapped executor-specific functions like getconnections().
+  - Maintains all previous features.
   ══════════════════════════════════════════════════════════════
 ]]
 
@@ -85,7 +84,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V38  ·  THE POLISH EDITION"
+subLbl.Text   = "JOSEPEDOV V39  ·  ULTIMATE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -149,7 +148,6 @@ barTxt.TextColor3 = Color3.fromRGB(40,90,65)
 barTxt.Font = Enum.Font.Code
 barTxt.TextSize = 12
 
--- Speed lines
 local speedLines = {}
 math.randomseed(42)
 for i=1,12 do
@@ -180,12 +178,9 @@ local CAM_ROUTE = {
     {CFrame.lookAt(Vector3.new(3180,75,1100),  Vector3.new(2900,0,700))},
     {CFrame.lookAt(Vector3.new(2900,40,600),   Vector3.new(2513,0,411))},
     {CFrame.lookAt(Vector3.new(2650,55,480),   Vector3.new(2981,0,537))},
-    {CFrame.lookAt(Vector3.new(3050,45,450),   Vector3.new(3485,0,622))},
-    {CFrame.lookAt(Vector3.new(3380,60,750),   Vector3.new(3485,0,622))},
 }
 cam.CFrame = CAM_ROUTE[1][1]
 
--- ── V38 FIX: RESTORED FULL UI PRINTS AND ROUTE ANIMATIONS ──
 local function SetProg(pct, msg, activeDot)
     TweenService:Create(barFill, TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
         {Size=UDim2.new(pct/100,0,1,0)}):Play()
@@ -214,12 +209,13 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  CONFIG & STATE
 -- ─────────────────────────────────────────────────────────────
-SetProg(5, "Reading Configurations...", 1)
+SetProg(5, "Loading Configurations...", 1)
 task.wait(0.3)
 
 local Config = {
     AutoRace       = false,
     SpeedFarm      = false,
+    FarmSpeed      = 250, -- NEW: Separate Speed for Auto-Farm
     AntiAFK        = false,
     GhostMode      = false,
     SpeedHack      = false,
@@ -277,6 +273,75 @@ player.Idled:Connect(function()
         VirtualUser:ClickButton2(Vector2.new())
     end
 end)
+
+-- ─────────────────────────────────────────────────────────────
+--  WORLD & PERFORMANCE HELPERS (RESTORED IN V39)
+-- ─────────────────────────────────────────────────────────────
+SetProg(35, "Restoring World Modifiers...", 3)
+task.wait(0.2)
+
+local function ToggleTraffic()
+    Config.TrafficBlocked = not Config.TrafficBlocked
+    local ev = ReplicatedStorage:FindFirstChild("CreateNPCVehicle")
+    if Config.TrafficBlocked then
+        pcall(function()
+            if ev and getconnections then 
+                for _,c in pairs(getconnections(ev.OnClientEvent)) do c:Disable() end 
+            end
+        end)
+        for _,n in ipairs({"NPCVehicles","Traffic","Vehicles"}) do
+            local f = Workspace:FindFirstChild(n)
+            if f then f:ClearAllChildren() end
+        end
+    else
+        pcall(function()
+            if ev and getconnections then 
+                for _,c in pairs(getconnections(ev.OnClientEvent)) do c:Enable() end 
+            end
+        end)
+    end
+    return Config.TrafficBlocked
+end
+
+local function ToggleFPSBoost()
+    Config.FPS_Boosted = not Config.FPS_Boosted
+    pcall(function()
+        if Config.FPS_Boosted then
+            Lighting.GlobalShadows = false
+            if sethiddenproperty then 
+                pcall(function() sethiddenproperty(Lighting,"Technology",Enum.Technology.Voxel) end)
+            end
+            for _,v in ipairs(workspace:GetDescendants()) do 
+                pcall(function()
+                    if v:IsA("BasePart") then v.CastShadow=false
+                    elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then v.Enabled=false end
+                end) 
+            end
+        else
+            Lighting.GlobalShadows = true
+            if sethiddenproperty then 
+                pcall(function() sethiddenproperty(Lighting,"Technology",OriginalTech) end)
+            end
+            for _,v in ipairs(workspace:GetDescendants()) do 
+                pcall(function()
+                    if v:IsA("BasePart") then v.CastShadow=true
+                    elseif v:IsA("Trail") or v:IsA("ParticleEmitter") then v.Enabled=true end
+                end) 
+            end
+        end
+    end)
+    return Config.FPS_Boosted
+end
+
+local function ToggleFullBright()
+    Config.FullBright = not Config.FullBright
+    if not Config.FullBright then
+        Lighting.Ambient = OriginalAmbient
+        Lighting.OutdoorAmbient = OriginalOutdoor
+        Lighting.ClockTime = OriginalClock
+    end
+    return Config.FullBright
+end
 
 -- ─────────────────────────────────────────────────────────────
 --  PHYSICS & COLLISIONS
@@ -369,7 +434,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  RACE HELPERS
 -- ─────────────────────────────────────────────────────────────
-SetProg(40, "Calibrating Race Route Logic...", 3)
+SetProg(50, "Calibrating Race Route Logic...", 4)
 task.wait(0.3)
 
 local function FindPlayerRaceFolder()
@@ -427,7 +492,7 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  AUTO-RACE ENGINE
 -- ─────────────────────────────────────────────────────────────
-SetProg(60, "Hooking Auto-Queue Engine...", 4)
+SetProg(65, "Hooking Auto-Queue Engine...", 4)
 task.wait(0.3)
 
 local GATE_INSIDE  = 0.10 
@@ -610,8 +675,8 @@ end
 -- ─────────────────────────────────────────────────────────────
 --  UI BUILDER
 -- ─────────────────────────────────────────────────────────────
-SetProg(80, "Assembling Fluent UI...", 4)
-task.wait(0.3)
+SetProg(80, "Assembling Fluent UI...", 5)
+task.wait(0.2)
 
 local Theme = {
     Background = Color3.fromRGB(24, 24, 28),
@@ -669,7 +734,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V38"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V39"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1127,7 +1192,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  V38"
+arSub.Text   = "City Highway Race  ·  V39"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
@@ -1268,6 +1333,12 @@ FluentToggle(TabFarm, "🏎️ Auto Speed Farm", "Teleports car to an infinite s
     return v
 end)
 
+-- ── V39 FIX: Added Farm Cruising Speed Slider ──
+Section(TabFarm, "  FARM SETTINGS")
+FluentSlider(TabFarm, "Farm Cruising Speed", 50, 400, Config.FarmSpeed, 250, 
+    function() return Config.FarmSpeed end, 
+    function(v) Config.FarmSpeed = math.clamp(v, 50, 400) end)
+
 Section(TabFarm, "  OVERNIGHT TOOLS")
 FluentToggle(TabFarm, "💤 Anti-AFK (No Kick)", "Intercepts Roblox idle kicks for overnight farming", function(v) 
     Config.AntiAFK = v
@@ -1316,7 +1387,7 @@ FluentStepper(TabCar, "Boost Power", "%.1f",
     function() Config.Acceleration=math.max(0.5,Config.Acceleration-0.5) end,
     function() Config.Acceleration=Config.Acceleration+0.5 end)
 
--- ── WORLD TAB ─────────────────────────────────────────────────
+-- ── WORLD TAB (RESTORED) ──────────────────────────────────────
 Section(TabWorld, "  TRAFFIC")
 FluentToggle(TabWorld, "🚫 Kill Traffic", "Remove NPC vehicles from world", function() 
     return ToggleTraffic() 
@@ -1354,10 +1425,10 @@ local function InfoRow(parent, text)
     l.TextXAlignment = Enum.TextXAlignment.Left
 end
 
-InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V38")
-InfoRow(TabMisc, "🔧  Complete Utility & Farming Edition")
+InfoRow(TabMisc, "🏁  Midnight Chasers AutoRace  V39")
+InfoRow(TabMisc, "🔧  Ultimate Complete Edition")
 InfoRow(TabMisc, "💡  Fluent UI  ·  josepedov")
-InfoRow(TabMisc, "📋  Changelog: Restored Visual Loading Prints.")
+InfoRow(TabMisc, "📋  Changelog: Restored World mods & added Farm Speed.")
 
 -- Init default tab
 if AllTabs[1] and AllTabBtns[1] then
@@ -1367,7 +1438,7 @@ if AllTabs[1] and AllTabBtns[1] then
     AllTabBtns[1].Ind.Visible = true
 end
 
-SetProg(95, "Finalising System Hooks...", 4)
+SetProg(95, "Finalising System Hooks...", 5)
 task.wait(0.3)
 
 -- ═══════════════════════════════════════════════════════════════
@@ -1448,8 +1519,8 @@ RunService.Heartbeat:Connect(function()
             -- Lock orientation to prevent flipping on the flat road
             root.AssemblyAngularVelocity = Vector3.zero
             
-            -- Force car perfectly straight forward at max speed
-            root.AssemblyLinearVelocity = root.CFrame.LookVector * Config.MaxSpeed
+            -- Force car perfectly straight forward at FARM speed
+            root.AssemblyLinearVelocity = root.CFrame.LookVector * Config.FarmSpeed
             SetStatus("🚜 Auto-Farm Active — Speeding on Sky Road", 0, 255, 100)
         end
         return -- Skip normal AutoRace processing while farming
@@ -1540,7 +1611,7 @@ end)
 -- ─────────────────────────────────────────────────────────────
 --  DISMISS LOADING SCREEN
 -- ─────────────────────────────────────────────────────────────
-SetProg(100, "Ready!", 5)
+SetProg(100, "Ready!")
 task.wait(0.5)
 
 if loadAnimConn then 
@@ -1570,7 +1641,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J38] Midnight Chasers — V38 Polish Edition Ready")
-print("[J38] Developed by josepedov")
-print("[J38] Active Hooks: AutoRace, Farm, Anti-AFK, Nitro")
+print("[J39] Midnight Chasers — V39 Ultimate Edition Ready")
+print("[J39] Developed by josepedov")
+print("[J39] Active Hooks: AutoRace, AutoFarm, Anti-AFK, World Mods")
 print("═════════════════════════════════════════════════\n")
