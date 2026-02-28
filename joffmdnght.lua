@@ -323,7 +323,7 @@ local function SetStatus(text, r, g, b)
 end
 
 -- ─────────────────────────────────────────────────────────────
---  STABLE FLIGHT ENGINE (V23c)
+--  STABLE FLIGHT ENGINE
 -- ─────────────────────────────────────────────────────────────
 --
 --  KEY INSIGHT (confirmed from place XML):
@@ -352,8 +352,8 @@ end
 local ROAD_HOVER  = 5.5     -- studs above actual road surface (terrain-locked floor)
 local GATE_INSIDE = 0.30  -- fraction of gate size above center (inside trigger volume)
 local PUNCH_DIST  = 14    -- studs XZ at which we PivotTo through the gate (guaranteed hit)
-local CEIL_GAP    = 7     -- push down if ceiling within this many studs
-local FLOOR_RAY_DIST = 250  -- extended ray for V23c
+local CEIL_GAP    = 8     -- push down if ceiling within this many studs
+local FLOOR_GAP   = 5     -- push up if solid floor within this many studs
 
 local function DoRaceLoop(uuidFolder)
     raceOwnsStatus = true
@@ -476,63 +476,67 @@ local function DoRaceLoop(uuidFolder)
                 break
             end
 
-            -- ── Y COMPUTATION (V23c — ultra stable terrain-locked) ──
+            -- ── Y COMPUTATION (V23b — bridge-aware, terrain-locked) ──
+            -- Base: always target inside the gate trigger volume
             local targetY = gateTargetY
 
-            -- ① TERRAIN FLOOR — 250-stud downcast, find actual road surface.
+            -- ① TERRAIN FLOOR — 80-stud downcast, find actual road surface.
             --   This is the absolute floor; nothing ever overrides it.
-            local roadY = nil
-            local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -FLOOR_RAY_DIST, 0), rcParams)
+            local roadY    = nil
+            local floorRay = Workspace:Raycast(myPos, Vector3.new(0, -80, 0), rcParams)
             if floorRay then
-                roadY = floorRay.Position.Y
-            else
-                roadY = lastSafeY - ROAD_HOVER  -- fallback if ray misses
-            end
-            targetY = math.max(targetY, roadY + ROAD_HOVER)
-
-            -- Emergency catch: if already below road, snap up hard
-            if myPos.Y < roadY + 2 then
-                targetY = roadY + ROAD_HOVER + 8
+                roadY  = floorRay.Position.Y
+                -- Raise targetY so car sits ROAD_HOVER above real road
+                targetY = math.max(targetY, roadY + ROAD_HOVER)
+                -- Emergency catch: if already below road, snap up hard
+                if myPos.Y < roadY + 1 then
+                    targetY = roadY + ROAD_HOVER + 4
+                end
             end
 
             -- ② CEILING GUARD — bridge-aware
-            local MIN_HEADROOM = 12
-            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 28, 0), rcParams)
+            --   Cast 25 studs up. If something is close, measure headroom:
+            --     headroom = ceilY - roadY  (space between road and bridge belly)
+            --   If headroom > MIN_HEADROOM: car CAN fit under → push down,
+            --     but NEVER below roadY + ROAD_HOVER (floor wins).
+            --   If headroom ≤ MIN_HEADROOM: bridge is too low to pass under →
+            --     cast further up to find bridge TOP and go OVER it instead.
+            --   MIN_HEADROOM = 10 studs (car height \~5, ROAD_HOVER 4, 1 spare)
+            local MIN_HEADROOM = 10
+            local ceilHit = Workspace:Raycast(myPos, Vector3.new(0, 25, 0), rcParams)
             if ceilHit then
-                local ceilY = ceilHit.Position.Y
-                local gap = ceilY - myPos.Y
+                local ceilY    = ceilHit.Position.Y
+                local gap      = ceilY - myPos.Y
                 local headroom = roadY and (ceilY - roadY) or gap
 
                 if gap < CEIL_GAP then
                     if headroom > MIN_HEADROOM then
                         -- Enough room to pass under: nudge down, floor-clamped
-                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 1.2
-                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER + 2) end
+                        local pushDown = myPos.Y - (CEIL_GAP - gap) * 2
+                        if roadY then pushDown = math.max(pushDown, roadY + ROAD_HOVER) end
                         targetY = math.min(targetY, pushDown)
                     else
                         -- Bridge too low to duck under → climb over it
-                        -- Cast 100 studs up to find bridge TOP
+                        -- Cast 80 studs up to find the bridge top surface
                         local topRay = Workspace:Raycast(
-                            Vector3.new(myPos.X, ceilY + 1, myPos.Z),
-                            Vector3.new(0, 100, 0), rcParams)
+                            Vector3.new(myPos.X, ceilY + 0.5, myPos.Z),
+                            Vector3.new(0, 80, 0), rcParams)
                         if topRay then
                             -- Found the top of the bridge deck; hover above it
-                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER + 3)
+                            targetY = math.max(targetY, topRay.Position.Y + ROAD_HOVER)
                         else
                             -- Fallback: just go above the ceiling hit
-                            targetY = math.max(targetY, ceilY + ROAD_HOVER + 6)
+                            targetY = math.max(targetY, ceilY + ROAD_HOVER)
                         end
                     end
                 end
             end
 
             -- ③ ABSOLUTE FLOOR GUARANTEE — runs last, unconditionally.
-            --   Ceiling guard result can NEVER push car below road surface.
+            --   Ceiling guard result can NEVER send car below road surface.
             if roadY then
                 targetY = math.max(targetY, roadY + ROAD_HOVER)
             end
-            targetY = math.max(targetY, lastSafeY - 3)
-            targetY = math.max(targetY, 8)  -- absolute minimum Y in world
 
             -- PD controller — asymmetric gains:
             -- Downward correction is stronger (car tends to drift UP at speed).
@@ -705,7 +709,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V23c"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V23"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1114,7 +1118,7 @@ local arSub = Instance.new("TextLabel",arRow)
 arSub.Size   = UDim2.new(0.75,0,0.44,0)
 arSub.Position = UDim2.new(0,12,0.56,0)
 arSub.BackgroundTransparency=1
-arSub.Text   = "City Highway Race  ·  Ultra-Stable V23c"
+arSub.Text   = "City Highway Race  ·  Gate-top V22"
 arSub.TextColor3 = Theme.SubText
 arSub.Font   = Enum.Font.Gotham
 arSub.TextSize = 10
