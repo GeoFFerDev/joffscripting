@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V40 — MIDNIGHT CHASERS
+  JOSEPEDOV V41 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -102,7 +102,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V40  ·  ULTIMATE + PRELOADER"
+subLbl.Text   = "JOSEPEDOV V41  ·  MOTO EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -487,6 +487,11 @@ local Config = {
     AutoRaceSpeed  = 350,
     Deadzone       = 0.1,
     TireGrip       = false,
+    -- Motorcycle features
+    MotoSpeedHack  = false,  -- horizontal-only boost (no flip)
+    MotoMaxSpeed   = 200,    -- top speed for moto boost (st/s)
+    MotoAccel      = 2.0,    -- boost increment per frame
+    NoCrashDeath   = false,  -- keep health full, prevent ragdoll on collision
 }
 local AR_SPEED_CAP = 600
 
@@ -675,6 +680,31 @@ local function RestoreCollisions()
         end
     end
     disabledCar = nil
+end
+
+-- ─────────────────────────────────────────────────────────────
+--  MOTORCYCLE DETECTION
+-- ─────────────────────────────────────────────────────────────
+--  Motorcycles confirmed in place XML (Tarvo SVR, Duc Desedomeci,
+--  Charlette R6, etc.) all use the same A-Chassis VehicleSeat as
+--  cars. Detection is purely by model name keywords.
+--  SpeedHack boosts along the horizontal XZ plane — NOT the full
+--  3D LookVector. When a bike is leaning the LookVector tilts
+--  downward; boosting along it pushes the front wheel into the
+--  ground and flips the bike. XZ projection avoids this entirely.
+local MOTO_KEYS = {
+    "bike","moto","cycle","svr","duc","cbr","cbf","cb5","cb6","cb7",
+    "r1","r6","r3","r25","gsx","ninja","z800","z900","z1000",
+    "mt07","mt09","s1000","triumph","harley","scrambl","chopper",
+    "tarvo","charlette","desedomeci","aprilia","ktm","husqvarna",
+}
+local function IsMoto(vehicle)
+    if not vehicle then return false end
+    local n = vehicle.Name:lower()
+    for _, kw in ipairs(MOTO_KEYS) do
+        if n:find(kw, 1, true) then return true end
+    end
+    return false
 end
 
 local function FlipCar()
@@ -993,7 +1023,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V40"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V41"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1646,6 +1676,39 @@ FluentStepper(TabCar, "Boost Power", "%.1f",
     function() Config.Acceleration=math.max(0.5,Config.Acceleration-0.5) end,
     function() Config.Acceleration=Config.Acceleration+0.5 end)
 
+-- ── MOTORCYCLE SECTION ───────────────────────────────────────
+Section(TabCar, "  MOTORCYCLE")
+
+FluentToggle(TabCar, "🏍️ Moto Speed Boost",
+    "XZ-plane boost for bikes — no flipping on lean",
+    function(v)
+        Config.MotoSpeedHack = v
+        return v
+    end)
+
+FluentToggle(TabCar, "🛡️ No Crash Death",
+    "Health stays full — no death or ragdoll on collision",
+    function(v)
+        Config.NoCrashDeath = v
+        if v and player.Character then
+            local h = player.Character:FindFirstChild("Humanoid")
+            if h then
+                pcall(function() h.BreakJointsOnDeath = false end)
+            end
+        end
+        return v
+    end)
+
+FluentStepper(TabCar, "Moto Top Speed", "%d st/s",
+    function() return Config.MotoMaxSpeed end,
+    function() Config.MotoMaxSpeed = math.max(50, Config.MotoMaxSpeed - 50) end,
+    function() Config.MotoMaxSpeed = Config.MotoMaxSpeed + 50 end)
+
+FluentStepper(TabCar, "Moto Boost Power", "%.1f",
+    function() return Config.MotoAccel end,
+    function() Config.MotoAccel = math.max(0.5, Config.MotoAccel - 0.5) end,
+    function() Config.MotoAccel = Config.MotoAccel + 0.5 end)
+
 -- ── WORLD TAB (RESTORED) ──────────────────────────────────────
 Section(TabWorld, "  TRAFFIC")
 FluentToggle(TabWorld, "🚫 Kill Traffic", "Remove NPC vehicles from world", function() 
@@ -1713,13 +1776,28 @@ RunService.Heartbeat:Connect(function()
 
     local ch = player.Character
     if not ch or not ch:FindFirstChild("Humanoid") then return end
-    currentSeat = ch.Humanoid.SeatPart
+    local humanoid = ch.Humanoid
+
+    -- ── NO CRASH DEATH — runs every frame regardless of vehicle ──
+    -- Keeps health at max and disables joint-breaking so the
+    -- character cannot die or ragdoll from collision physics.
+    if Config.NoCrashDeath then
+        if humanoid.Health < humanoid.MaxHealth then
+            humanoid.Health = humanoid.MaxHealth
+        end
+        pcall(function() humanoid.BreakJointsOnDeath = false end)
+    end
+
+    currentSeat = humanoid.SeatPart
     if not currentSeat or not currentSeat:IsA("VehicleSeat") then
         currentCar = nil
         return
     end
     currentCar = currentSeat.Parent
-    
+
+    -- Detect motorcycle by model name (see MOTO_KEYS list above)
+    local isMoto = IsMoto(currentCar)
+
     local wantsMods = Config.TireGrip
     if wantsMods ~= lastModsState then
         ManagePhysicsMods(currentCar)
@@ -1862,8 +1940,40 @@ RunService.Heartbeat:Connect(function()
                 SetStatus(isRev and "Reversing..." or "Status: Idle")
             end
         end
+    elseif Config.MotoSpeedHack and isMoto then
+        -- Status is set inside the moto block below; skip generic idle
     else
         SetStatus("Status: Idle")
+    end
+
+    -- ── MOTO SPEED HACK ─────────────────────────────────────────
+    -- Separate from the car SpeedHack. Boosts along the XZ plane
+    -- only — never along the full 3D LookVector which on a leaning
+    -- bike points partly downward and would flip the motorcycle.
+    if Config.MotoSpeedHack and isMoto then
+        if root and root:IsA("BasePart") then
+            -- Project look direction onto XZ (horizontal) plane
+            local lv   = root.CFrame.LookVector
+            local flat = Vector3.new(lv.X, 0, lv.Z)
+            if flat.Magnitude > 0.01 then flat = flat.Unit end
+
+            if gasVal > Config.Deadzone and not isRev then
+                local spd = root.AssemblyLinearVelocity.Magnitude
+                if spd < Config.MotoMaxSpeed then
+                    root.AssemblyLinearVelocity =
+                        root.AssemblyLinearVelocity + flat * Config.MotoAccel
+                    SetStatus(string.format(
+                        "🏍️ Moto Boost: %.0f / %d st/s", spd, Config.MotoMaxSpeed),
+                        0, 215, 80)
+                else
+                    SetStatus(string.format(
+                        "🏍️ Moto Boost: MAX  %.0f st/s", spd),
+                        255, 200, 0)
+                end
+            else
+                SetStatus(isRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
+            end
+        end
     end
 end)
 
@@ -1913,7 +2023,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J40] Midnight Chasers — V40 Ultimate + Preloader Ready")
-print("[J40] Developed by josepedov")
-print("[J40] Active Hooks: AutoRace, AutoFarm, Anti-AFK, World Mods + Preloader")
+print("[J41] Midnight Chasers — V41 Moto Edition Ready")
+print("[J41] Developed by josepedov")
+print("[J41] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader")
 print("═════════════════════════════════════════════════\n")
