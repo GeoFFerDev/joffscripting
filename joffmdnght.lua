@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V42 — MIDNIGHT CHASERS
+  JOSEPEDOV V43 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V42  ·  MOTO + STREAM EDITION"
+subLbl.Text   = "JOSEPEDOV V43  ·  BRIDGE-SAFE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -954,29 +954,56 @@ local function DoRaceLoop(uuidFolder)
                 break 
             end
 
-            local dir3D = (targetPos - myPos).Unit
-            local desiredVelX = dir3D.X * arSpeed
-            local desiredVelY = dir3D.Y * arSpeed
-            local desiredVelZ = dir3D.Z * arSpeed
-            
-            local yErr = targetPos.Y - myPos.Y
-            desiredVelY = desiredVelY + (yErr * 1.5)
+            -- ── VELOCITY CALCULATION (bridge-safe) ──────────────
+            -- XZ: always full arSpeed toward gate (horizontal only).
+            -- Y:  P-controller toward gateTargetY.
+            --
+            -- BRIDGE DETECTION: cast a short ray straight up from the car.
+            -- If it hits anything within 20 studs, the car is under a bridge
+            -- or tunnel. In that case:
+            --   • Skip the floor-push entirely (floor ray was hitting the
+            --     bridge TOP surface and reporting it as "road", then firing
+            --     a massive pushUp that slammed the car into the bridge at
+            --     high speed every frame — that's the "stuck" bug).
+            --   • Cap desiredVelY to ≤ 0 so the car cannot push upward
+            --     into the structure regardless of P-controller sign.
+            -- Outside of bridges: normal floor-push applies as before.
 
-            if distXZ > 150 then
-                local dirXZ = (targetXZ - myXZ).Unit
-                local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 50, 0)
-                local floorRay = Workspace:Raycast(aheadPos, Vector3.new(0, -150, 0), rcParams)
+            local dirXZ    = (targetXZ - myXZ).Unit  -- pure horizontal direction
+            local yErr     = targetPos.Y - myPos.Y
+            local desiredVelX = dirXZ.X * arSpeed
+            local desiredVelZ = dirXZ.Z * arSpeed
+            local desiredVelY = yErr * 4              -- P-controller (no oscillation)
+
+            -- Ceiling check — is the car under a bridge/overpass?
+            local ceilRay = Workspace:Raycast(
+                myPos, Vector3.new(0, 20, 0), rcParams)
+            local underBridge = (ceilRay ~= nil)
+
+            if underBridge then
+                -- Under a structure: fly flat, do NOT push upward into it.
+                desiredVelY = math.min(desiredVelY, 0)
+            elseif distXZ > 150 then
+                -- Open air: standard floor-push to avoid dipping underground.
+                -- Ray starts BELOW the car position (avoids hitting bridge top).
+                local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 10, 0)
+                local floorRay = Workspace:Raycast(
+                    aheadPos, Vector3.new(0, -80, 0), rcParams)
                 if floorRay then
-                    local roadY = floorRay.Position.Y
-                    local safeY = roadY + 8
+                    local roadY  = floorRay.Position.Y
+                    local safeY  = roadY + 8
                     if myPos.Y < safeY then
-                        local pushUp = (safeY - myPos.Y) * 5
-                        desiredVelY = math.max(desiredVelY, pushUp)
+                        -- Gentle push — capped so it can't overwhelm at high speed
+                        local pushUp = math.min((safeY - myPos.Y) * 3, 40)
+                        desiredVelY  = math.max(desiredVelY, pushUp)
                     end
                 end
             end
 
-            root.AssemblyLinearVelocity = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
+            -- Final speed cap on Y so we never rocket vertically
+            desiredVelY = math.clamp(desiredVelY, -60, 60)
+
+            root.AssemblyLinearVelocity  = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
             root.AssemblyAngularVelocity = Vector3.zero
 
             SetStatus(string.format("→ CP #%s  %.0f studs  Y%.1f▶%.1f", tostring(cpIdx), distXZ, myPos.Y, targetPos.Y), 0, 190, 255)
@@ -1067,7 +1094,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V42"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V43"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1848,7 +1875,12 @@ RunService.Heartbeat:Connect(function()
         lastModsState = wantsMods
     end
 
+    -- Read throttle from all available sources.
+    -- A-Chassis motorcycles use ContextActionService for input and never
+    -- write back to VehicleSeat.ThrottleFloat — it stays 0.
+    -- Priority:  A-Chassis Values  >  seat integer Throttle  >  ThrottleFloat
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
+
     local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
     if iface and iface:FindFirstChild("Values") then
         local v = iface.Values
@@ -1856,8 +1888,30 @@ RunService.Heartbeat:Connect(function()
         if v:FindFirstChild("Brake")    then brakeVal = v.Brake.Value    end
         if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
     end
-    
-    local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
+
+    -- Fallback: VehicleSeat.Throttle is an integer (-1/0/1) that Roblox
+    -- writes from seat controls even when A-Chassis overrides the drive system.
+    local seatThrottleInt = currentSeat.Throttle or 0
+    if gasVal == 0 and seatThrottleInt ~= 0 then
+        gasVal = seatThrottleInt  -- -1 or +1
+    end
+
+    -- Second fallback for motorcycles: if the vehicle is already moving
+    -- forward at > 3 st/s and no explicit reverse signal, treat as throttle.
+    -- Needed because some A-Chassis bikes never expose a readable gas value.
+    local velFwd = 0
+    do
+        local rootNow = currentCar.PrimaryPart or currentSeat
+        if rootNow then
+            local fwd = rootNow.CFrame.LookVector
+            velFwd = rootNow.AssemblyLinearVelocity:Dot(fwd)
+        end
+    end
+    if gasVal == 0 and velFwd > 3 then
+        gasVal = 1  -- bike is moving forward — treat as throttle applied
+    end
+
+    local isRev = (gearVal == -1) or (brakeVal > 0.1) or (gasVal < -0.1) or (velFwd < -2)
     local root = currentCar.PrimaryPart or currentSeat
 
     -- ── INFINITE NITRO ──────────────────────────────
@@ -2067,7 +2121,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J42] Midnight Chasers — V42 Moto+Stream Edition Ready")
-print("[J42] Developed by josepedov")
-print("[J42] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J43] Midnight Chasers — V43 Bridge-Safe Edition Ready")
+print("[J43] Developed by josepedov")
+print("[J43] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
