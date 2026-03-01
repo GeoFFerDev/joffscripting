@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V46 — MIDNIGHT CHASERS
+  JOSEPEDOV V47 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V46  ·  STABLE THROTTLE"
+subLbl.Text   = "JOSEPEDOV V47  ·  STABLE THROTTLE"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1118,7 +1118,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V46"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V47"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -2052,22 +2052,8 @@ RunService.Heartbeat:Connect(function()
             local flat = Vector3.new(lv.X, 0, lv.Z)
             if flat.Magnitude > 0.01 then flat = flat.Unit end
 
-            -- Moto-local throttle: use shared gasVal first, then fall back to
-            -- velocity-forward (some A-Chassis bikes never write any gas value).
-            -- This fallback is ONLY here — it does not touch the shared gasVal
-            -- so car SpeedHack is completely unaffected.
-            local motoGas = gasVal
-            if motoGas == 0 then
-                local velFwd = root.AssemblyLinearVelocity:Dot(root.CFrame.LookVector)
-                if velFwd > 3 then
-                    motoGas = 1
-                elseif velFwd < -2 then
-                    motoGas = -1
-                end
-            end
-            local motoIsRev = isRev or (motoGas < -0.1)
-
-            if motoGas > Config.Deadzone and not motoIsRev then
+            -- Uses the same gasVal/isRev as car SpeedHack — no extra fallback.
+            if gasVal > Config.Deadzone and not isRev then
                 local spd = root.AssemblyLinearVelocity.Magnitude
                 if spd < Config.MotoMaxSpeed then
                     root.AssemblyLinearVelocity =
@@ -2081,7 +2067,7 @@ RunService.Heartbeat:Connect(function()
                         255, 200, 0)
                 end
             else
-                SetStatus(motoIsRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
+                SetStatus(isRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
             end
         end
     end
@@ -2133,7 +2119,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J46] Midnight Chasers — V46 Stable Throttle Ready")
-print("[J46] Developed by josepedov")
-print("[J46] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J47] Midnight Chasers — V47 Stable Throttle Ready")
+print("[J47] Developed by josepedov")
+print("[J47] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
