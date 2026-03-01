@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V47 — MIDNIGHT CHASERS
+  JOSEPEDOV V48 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V47  ·  STABLE THROTTLE"
+subLbl.Text   = "JOSEPEDOV V48  ·  MOTO KEY INPUT"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1118,7 +1118,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V47"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V48"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -2042,18 +2042,40 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- ── MOTO SPEED HACK ─────────────────────────────────────────
-    -- Separate from the car SpeedHack. Boosts along the XZ plane
-    -- only — never along the full 3D LookVector which on a leaning
-    -- bike points partly downward and would flip the motorcycle.
+    -- A-Chassis motorcycles never write to ThrottleFloat or
+    -- Values.Throttle, so gasVal is always 0 — using it directly
+    -- means the boost never fires. Instead read actual key/gamepad
+    -- state via UserInputService: W / Up-arrow / gamepad R2.
+    -- This is the ONLY approach that: (a) detects real throttle
+    -- presses on bikes, and (b) cannot auto-throttle because it
+    -- reflects what the player's finger is doing right now.
     if Config.MotoSpeedHack then
         if root and root:IsA("BasePart") then
-            -- Project look direction onto XZ (horizontal) plane
+            -- Detect throttle from real input (keyboard, gamepad, mobile)
+            local UIS = UserInputService
+            local throttleHeld =
+                UIS:IsKeyDown(Enum.KeyCode.W)              or
+                UIS:IsKeyDown(Enum.KeyCode.Up)             or
+                UIS:IsKeyDown(Enum.KeyCode.I)              or  -- alt binding
+                UIS:IsGamepadButtonDown(Enum.UserInputType.Gamepad1,
+                    Enum.KeyCode.ButtonR2)                 or
+                (gasVal > Config.Deadzone)                     -- car fallback
+
+            local reverseHeld =
+                UIS:IsKeyDown(Enum.KeyCode.S)              or
+                UIS:IsKeyDown(Enum.KeyCode.Down)           or
+                UIS:IsKeyDown(Enum.KeyCode.K)              or
+                UIS:IsGamepadButtonDown(Enum.UserInputType.Gamepad1,
+                    Enum.KeyCode.ButtonL2)                 or
+                isRev
+
+            -- Project look direction onto XZ (horizontal) plane — avoids
+            -- pushing the front wheel into the ground when bike is leaning.
             local lv   = root.CFrame.LookVector
             local flat = Vector3.new(lv.X, 0, lv.Z)
             if flat.Magnitude > 0.01 then flat = flat.Unit end
 
-            -- Uses the same gasVal/isRev as car SpeedHack — no extra fallback.
-            if gasVal > Config.Deadzone and not isRev then
+            if throttleHeld and not reverseHeld then
                 local spd = root.AssemblyLinearVelocity.Magnitude
                 if spd < Config.MotoMaxSpeed then
                     root.AssemblyLinearVelocity =
@@ -2067,7 +2089,7 @@ RunService.Heartbeat:Connect(function()
                         255, 200, 0)
                 end
             else
-                SetStatus(isRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
+                SetStatus(reverseHeld and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
             end
         end
     end
@@ -2119,7 +2141,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J47] Midnight Chasers — V47 Stable Throttle Ready")
-print("[J47] Developed by josepedov")
-print("[J47] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J48] Midnight Chasers — V48 Moto Key Input Ready")
+print("[J48] Developed by josepedov")
+print("[J48] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
