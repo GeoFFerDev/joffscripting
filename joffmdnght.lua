@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V43 — MIDNIGHT CHASERS
+  JOSEPEDOV V44 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V43  ·  BRIDGE-SAFE EDITION"
+subLbl.Text   = "JOSEPEDOV V44  ·  TUNNEL-SAFE EDITION"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -954,38 +954,63 @@ local function DoRaceLoop(uuidFolder)
                 break 
             end
 
-            -- ── VELOCITY CALCULATION (bridge-safe) ──────────────
+            -- ── VELOCITY CALCULATION (tunnel + bridge safe) ─────
             -- XZ: always full arSpeed toward gate (horizontal only).
-            -- Y:  P-controller toward gateTargetY.
+            -- Y:  P-controller toward gateTargetY, ceiling-clamped.
             --
-            -- BRIDGE DETECTION: cast a short ray straight up from the car.
-            -- If it hits anything within 20 studs, the car is under a bridge
-            -- or tunnel. In that case:
-            --   • Skip the floor-push entirely (floor ray was hitting the
-            --     bridge TOP surface and reporting it as "road", then firing
-            --     a massive pushUp that slammed the car into the bridge at
-            --     high speed every frame — that's the "stuck" bug).
-            --   • Cap desiredVelY to ≤ 0 so the car cannot push upward
-            --     into the structure regardless of P-controller sign.
-            -- Outside of bridges: normal floor-push applies as before.
+            -- CEILING HANDLING — two scenarios look identical to a raycast:
+            --
+            --  (a) OVERPASS / BRIDGE: car is flying UNDER it, gate is on the
+            --      far side at the same Y. The old floor ray started 50 studs
+            --      above the car, hit the bridge top as "road", then fired a
+            --      massive pushUp into the bridge underside = stuck bug.
+            --
+            --  (b) TUNNEL: car is flying INSIDE it, gate is ALSO inside.
+            --      The gate target Y is above the car's current Y. If we cap
+            --      desiredVelY ≤ 0 (V43 fix) the car can't climb to the
+            --      checkpoint and misses it = the new miss bug.
+            --
+            -- CORRECT FIX: allow full P-controller Y toward gateTargetY in
+            -- BOTH cases, but clamp so the car can never reach the ceiling.
+            --   ceilSafeY = ceilHit.Y - CEIL_BUFFER
+            --   If car is already at ceilSafeY, block further upward motion.
+            --   This lets the car steer into a tunnel CP while making it
+            --   physically impossible to punch through any ceiling.
+            -- The floor-push is skipped under any structure (still correct —
+            -- the floor ray hitting bridge top was the original stuck bug).
 
-            local dirXZ    = (targetXZ - myXZ).Unit  -- pure horizontal direction
-            local yErr     = targetPos.Y - myPos.Y
+            local CEIL_BUFFER = 5   -- studs below ceiling car must stay
+
+            local dirXZ       = (targetXZ - myXZ).Unit
+            local yErr        = targetPos.Y - myPos.Y
             local desiredVelX = dirXZ.X * arSpeed
             local desiredVelZ = dirXZ.Z * arSpeed
-            local desiredVelY = yErr * 4              -- P-controller (no oscillation)
+            local desiredVelY = yErr * 4   -- P-controller toward gate Y
 
-            -- Ceiling check — is the car under a bridge/overpass?
+            -- Ceiling check
             local ceilRay = Workspace:Raycast(
-                myPos, Vector3.new(0, 20, 0), rcParams)
-            local underBridge = (ceilRay ~= nil)
+                myPos, Vector3.new(0, 25, 0), rcParams)
 
-            if underBridge then
-                -- Under a structure: fly flat, do NOT push upward into it.
-                desiredVelY = math.min(desiredVelY, 0)
+            if ceilRay then
+                -- Under some structure (bridge OR tunnel).
+                -- Allow Y correction toward gate, but clamp so car stays
+                -- CEIL_BUFFER studs below the ceiling surface.
+                local ceilSafeY = ceilRay.Position.Y - CEIL_BUFFER
+                if myPos.Y >= ceilSafeY then
+                    -- Already at/above safe ceiling height → no more up
+                    desiredVelY = math.min(desiredVelY, 0)
+                else
+                    -- Below safe ceiling → allow up toward gate, but cap
+                    -- so velocity can't carry car past ceilSafeY in one frame.
+                    local maxUpVel = (ceilSafeY - myPos.Y) * 4
+                    desiredVelY = math.min(desiredVelY, maxUpVel)
+                end
+                -- No floor push under any structure (floor ray would hit
+                -- the structure surface and produce a wrong safeY)
             elseif distXZ > 150 then
-                -- Open air: standard floor-push to avoid dipping underground.
-                -- Ray starts BELOW the car position (avoids hitting bridge top).
+                -- Open air: floor-push to avoid dipping underground.
+                -- Ray origin is 10 studs up (not 50) so it can't reach
+                -- a bridge surface above and report it as "road".
                 local aheadPos = myPos + (dirXZ * 40) + Vector3.new(0, 10, 0)
                 local floorRay = Workspace:Raycast(
                     aheadPos, Vector3.new(0, -80, 0), rcParams)
@@ -993,14 +1018,13 @@ local function DoRaceLoop(uuidFolder)
                     local roadY  = floorRay.Position.Y
                     local safeY  = roadY + 8
                     if myPos.Y < safeY then
-                        -- Gentle push — capped so it can't overwhelm at high speed
                         local pushUp = math.min((safeY - myPos.Y) * 3, 40)
                         desiredVelY  = math.max(desiredVelY, pushUp)
                     end
                 end
             end
 
-            -- Final speed cap on Y so we never rocket vertically
+            -- Hard Y cap — never rocket vertically
             desiredVelY = math.clamp(desiredVelY, -60, 60)
 
             root.AssemblyLinearVelocity  = Vector3.new(desiredVelX, desiredVelY, desiredVelZ)
@@ -1094,7 +1118,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V43"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V44"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -2121,7 +2145,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J43] Midnight Chasers — V43 Bridge-Safe Edition Ready")
-print("[J43] Developed by josepedov")
-print("[J43] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J44] Midnight Chasers — V44 Tunnel-Safe Edition Ready")
+print("[J44] Developed by josepedov")
+print("[J44] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
