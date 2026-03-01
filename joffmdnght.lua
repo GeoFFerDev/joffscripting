@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V44 — MIDNIGHT CHASERS
+  JOSEPEDOV V45 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V44  ·  TUNNEL-SAFE EDITION"
+subLbl.Text   = "JOSEPEDOV V45  ·  CLEAN THROTTLE"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1118,7 +1118,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V44"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V45"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1900,9 +1900,11 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- Read throttle from all available sources.
-    -- A-Chassis motorcycles use ContextActionService for input and never
-    -- write back to VehicleSeat.ThrottleFloat — it stays 0.
-    -- Priority:  A-Chassis Values  >  seat integer Throttle  >  ThrottleFloat
+    -- Priority:  A-Chassis Values  >  VehicleSeat.Throttle (int)  >  ThrottleFloat
+    -- NOTE: velFwd (velocity-forward) fallback is intentionally NOT applied
+    -- here. Applying it globally caused both SpeedHack and MotoSpeedHack to
+    -- auto-throttle whenever the vehicle was rolling — it is only used inside
+    -- the MotoSpeedHack block where it can't infect car SpeedHack.
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
 
     local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
@@ -1913,29 +1915,14 @@ RunService.Heartbeat:Connect(function()
         if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
     end
 
-    -- Fallback: VehicleSeat.Throttle is an integer (-1/0/1) that Roblox
-    -- writes from seat controls even when A-Chassis overrides the drive system.
+    -- VehicleSeat.Throttle integer (-1/0/1) — Roblox writes this from seat
+    -- controls even when A-Chassis overrides the drive system.
     local seatThrottleInt = currentSeat.Throttle or 0
     if gasVal == 0 and seatThrottleInt ~= 0 then
-        gasVal = seatThrottleInt  -- -1 or +1
+        gasVal = seatThrottleInt
     end
 
-    -- Second fallback for motorcycles: if the vehicle is already moving
-    -- forward at > 3 st/s and no explicit reverse signal, treat as throttle.
-    -- Needed because some A-Chassis bikes never expose a readable gas value.
-    local velFwd = 0
-    do
-        local rootNow = currentCar.PrimaryPart or currentSeat
-        if rootNow then
-            local fwd = rootNow.CFrame.LookVector
-            velFwd = rootNow.AssemblyLinearVelocity:Dot(fwd)
-        end
-    end
-    if gasVal == 0 and velFwd > 3 then
-        gasVal = 1  -- bike is moving forward — treat as throttle applied
-    end
-
-    local isRev = (gearVal == -1) or (brakeVal > 0.1) or (gasVal < -0.1) or (velFwd < -2)
+    local isRev = (gearVal == -1) or (brakeVal > 0.1) or (gasVal < -0.1)
     local root = currentCar.PrimaryPart or currentSeat
 
     -- ── INFINITE NITRO ──────────────────────────────
@@ -2079,7 +2066,22 @@ RunService.Heartbeat:Connect(function()
             local flat = Vector3.new(lv.X, 0, lv.Z)
             if flat.Magnitude > 0.01 then flat = flat.Unit end
 
-            if gasVal > Config.Deadzone and not isRev then
+            -- Moto-local throttle: use shared gasVal first, then fall back to
+            -- velocity-forward (some A-Chassis bikes never write any gas value).
+            -- This fallback is ONLY here — it does not touch the shared gasVal
+            -- so car SpeedHack is completely unaffected.
+            local motoGas = gasVal
+            if motoGas == 0 then
+                local velFwd = root.AssemblyLinearVelocity:Dot(root.CFrame.LookVector)
+                if velFwd > 3 then
+                    motoGas = 1
+                elseif velFwd < -2 then
+                    motoGas = -1
+                end
+            end
+            local motoIsRev = isRev or (motoGas < -0.1)
+
+            if motoGas > Config.Deadzone and not motoIsRev then
                 local spd = root.AssemblyLinearVelocity.Magnitude
                 if spd < Config.MotoMaxSpeed then
                     root.AssemblyLinearVelocity =
@@ -2093,7 +2095,7 @@ RunService.Heartbeat:Connect(function()
                         255, 200, 0)
                 end
             else
-                SetStatus(isRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
+                SetStatus(motoIsRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
             end
         end
     end
@@ -2145,7 +2147,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J44] Midnight Chasers — V44 Tunnel-Safe Edition Ready")
-print("[J44] Developed by josepedov")
-print("[J44] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J45] Midnight Chasers — V45 Clean Throttle Ready")
+print("[J45] Developed by josepedov")
+print("[J45] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
