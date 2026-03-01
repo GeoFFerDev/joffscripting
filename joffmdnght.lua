@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V45 — MIDNIGHT CHASERS
+  JOSEPEDOV V46 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -103,7 +103,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V45  ·  CLEAN THROTTLE"
+subLbl.Text   = "JOSEPEDOV V46  ·  STABLE THROTTLE"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1118,7 +1118,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V45"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V46"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -1899,14 +1899,7 @@ RunService.Heartbeat:Connect(function()
         lastModsState = wantsMods
     end
 
-    -- Read throttle from all available sources.
-    -- Priority:  A-Chassis Values  >  VehicleSeat.Throttle (int)  >  ThrottleFloat
-    -- NOTE: velFwd (velocity-forward) fallback is intentionally NOT applied
-    -- here. Applying it globally caused both SpeedHack and MotoSpeedHack to
-    -- auto-throttle whenever the vehicle was rolling — it is only used inside
-    -- the MotoSpeedHack block where it can't infect car SpeedHack.
     local gasVal, brakeVal, gearVal = (currentSeat.ThrottleFloat or 0), 0, 1
-
     local iface = player.PlayerGui:FindFirstChild("A-Chassis Interface")
     if iface and iface:FindFirstChild("Values") then
         local v = iface.Values
@@ -1915,14 +1908,7 @@ RunService.Heartbeat:Connect(function()
         if v:FindFirstChild("Gear")     then gearVal  = v.Gear.Value     end
     end
 
-    -- VehicleSeat.Throttle integer (-1/0/1) — Roblox writes this from seat
-    -- controls even when A-Chassis overrides the drive system.
-    local seatThrottleInt = currentSeat.Throttle or 0
-    if gasVal == 0 and seatThrottleInt ~= 0 then
-        gasVal = seatThrottleInt
-    end
-
-    local isRev = (gearVal == -1) or (brakeVal > 0.1) or (gasVal < -0.1)
+    local isRev = (gearVal==-1) or (brakeVal>0.1) or (gasVal<-0.1)
     local root = currentCar.PrimaryPart or currentSeat
 
     -- ── INFINITE NITRO ──────────────────────────────
@@ -2147,7 +2133,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J45] Midnight Chasers — V45 Clean Throttle Ready")
-print("[J45] Developed by josepedov")
-print("[J45] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J46] Midnight Chasers — V46 Stable Throttle Ready")
+print("[J46] Developed by josepedov")
+print("[J46] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
