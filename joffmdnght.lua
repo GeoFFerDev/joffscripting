@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V49 — MIDNIGHT CHASERS
+  JOSEPEDOV V50 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -43,15 +43,17 @@ local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 -- ── MOTO THROTTLE STATE TRACKER ──────────────────────────────────────────────
--- Event-based (InputBegan/InputEnded), not polling (IsKeyDown).
--- IsKeyDown can silently return false in executor VehicleSeat contexts;
--- InputBegan always fires because UIS events are never sunk by CAS.
--- Keys sourced from Tuner Controls table: Throttle=Up, Throttle2=W, ContlrThrottle=ButtonR2
+-- CRITICAL: Do NOT guard on gameProcessed.
+-- The game's VehicleInput.BindInput() sinks throttle keys via
+-- ContextActionResult.Sink, making gameProcessed = true for every
+-- W / Up keypress while seated. Guarding on it means _motoThrottle
+-- is NEVER set. We track raw hardware input unconditionally.
+-- Keys match the Tuner Controls table exactly.
 local _motoThrottle  = false  -- true while player holds throttle
 local _motoReverse   = false  -- true while player holds brake/reverse
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+UserInputService.InputBegan:Connect(function(input, _)
+    -- Intentionally ignoring gameProcessed — see comment above.
     local k = input.KeyCode
     if k == Enum.KeyCode.Up   or k == Enum.KeyCode.W then
         _motoThrottle = true
@@ -138,7 +140,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V49  ·  MOTO EVENT INPUT"
+subLbl.Text   = "JOSEPEDOV V50  ·  MOTO RAW INPUT"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1153,7 +1155,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V49"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V50"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -2171,7 +2173,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J49] Midnight Chasers — V49 Moto Event Input Ready")
-print("[J49] Developed by josepedov")
-print("[J49] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J50] Midnight Chasers — V50 Moto Raw Input Ready")
+print("[J50] Developed by josepedov")
+print("[J50] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
