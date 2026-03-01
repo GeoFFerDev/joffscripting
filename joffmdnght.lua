@@ -1,5 +1,5 @@
 --[[
-  JOSEPEDOV V50 — MIDNIGHT CHASERS
+  JOSEPEDOV V51 — MIDNIGHT CHASERS
   Highway AutoRace exploit | Fluent UI | Ultimate Edition
 
   ══════════════════════════════════════════════════════════════
@@ -42,42 +42,7 @@ local Lighting         = game:GetService("Lighting")
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
--- ── MOTO THROTTLE STATE TRACKER ──────────────────────────────────────────────
--- CRITICAL: Do NOT guard on gameProcessed.
--- The game's VehicleInput.BindInput() sinks throttle keys via
--- ContextActionResult.Sink, making gameProcessed = true for every
--- W / Up keypress while seated. Guarding on it means _motoThrottle
--- is NEVER set. We track raw hardware input unconditionally.
--- Keys match the Tuner Controls table exactly.
-local _motoThrottle  = false  -- true while player holds throttle
-local _motoReverse   = false  -- true while player holds brake/reverse
-
-UserInputService.InputBegan:Connect(function(input, _)
-    -- Intentionally ignoring gameProcessed — see comment above.
-    local k = input.KeyCode
-    if k == Enum.KeyCode.Up   or k == Enum.KeyCode.W then
-        _motoThrottle = true
-    elseif k == Enum.KeyCode.Down or k == Enum.KeyCode.S then
-        _motoReverse  = true
-    elseif k == Enum.KeyCode.ButtonR2 then
-        _motoThrottle = true
-    elseif k == Enum.KeyCode.ButtonL2 then
-        _motoReverse  = true
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input, _)
-    local k = input.KeyCode
-    if k == Enum.KeyCode.Up   or k == Enum.KeyCode.W then
-        _motoThrottle = false
-    elseif k == Enum.KeyCode.Down or k == Enum.KeyCode.S then
-        _motoReverse  = false
-    elseif k == Enum.KeyCode.ButtonR2 then
-        _motoThrottle = false
-    elseif k == Enum.KeyCode.ButtonL2 then
-        _motoReverse  = false
-    end
-end)
+-- (moto uses velFwd — no input tracker needed)
 local VirtualUser      = game:GetService("VirtualUser")
 local CoreGui          = game:GetService("CoreGui")
 local StarterGui       = game:GetService("StarterGui")
@@ -140,7 +105,7 @@ local subLbl = Instance.new("TextLabel", bg)
 subLbl.Size   = UDim2.new(1,0,0,24)
 subLbl.Position = UDim2.new(0,0,0.36,0)
 subLbl.BackgroundTransparency = 1
-subLbl.Text   = "JOSEPEDOV V50  ·  MOTO RAW INPUT"
+subLbl.Text   = "JOSEPEDOV V51  ·  MOTO VELFWD+XZ CAP"
 subLbl.TextColor3 = Color3.fromRGB(60,130,100)
 subLbl.Font   = Enum.Font.GothamBold
 subLbl.TextSize = 14
@@ -1155,7 +1120,7 @@ TopBar.BackgroundTransparency = 1
 local TitleLbl = Instance.new("TextLabel", TopBar)
 TitleLbl.Size   = UDim2.new(0.6,0,1,0)
 TitleLbl.Position = UDim2.new(0,14,0,0)
-TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V50"
+TitleLbl.Text   = "🏁  MIDNIGHT CHASERS  V51"
 TitleLbl.Font   = Enum.Font.GothamBold
 TitleLbl.TextColor3 = Theme.Accent
 TitleLbl.TextSize = 12
@@ -2079,49 +2044,51 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- ── MOTO SPEED HACK ─────────────────────────────────────────
-    -- A-Chassis motorcycles never write to ThrottleFloat or
-    -- Values.Throttle, so gasVal is always 0 — using it directly
-    -- means the boost never fires. Instead read actual key/gamepad
-    -- state via UserInputService: W / Up-arrow / gamepad R2.
-    -- This is the ONLY approach that: (a) detects real throttle
-    -- presses on bikes, and (b) cannot auto-throttle because it
-    -- reflects what the player's finger is doing right now.
+    -- A-Chassis Tuner bikes never write to ThrottleFloat / Values.Throttle,
+    -- so gasVal is always 0.  IsKeyDown() and InputBegan both fail to detect
+    -- throttle in executor context because VehicleInput.BindInput() sinks
+    -- every throttle key via ContextActionResult.Sink before our listeners
+    -- can see them. The only reliable signal is velFwd: if the bike is
+    -- moving forward the player pressed throttle at some point; if isRev
+    -- (brake held or reverse gear) we stop boosting.
+    --
+    -- Car SpeedHack is completely isolated — it still uses gasVal/isRev
+    -- only, so it cannot be triggered by velFwd.  This block only runs when
+    -- isMoto is true.
+    --
+    -- Top-speed is checked against XZ-plane speed only.  AssemblyLinear
+    -- Velocity.Magnitude includes vertical Y from wheel suspension physics
+    -- and reads artificially high, causing the cap to trigger immediately.
     if Config.MotoSpeedHack then
         if root and root:IsA("BasePart") then
-            -- Throttle state comes from the persistent event tracker (_motoThrottle /
-            -- _motoReverse) set up at script load via InputBegan/InputEnded.
-            -- Event-based tracking is used because UserInputService:IsKeyDown()
-            -- can silently return false inside VehicleSeat contexts in many
-            -- executors, while InputBegan events are never suppressed by CAS.
-            -- Keys match the Tuner Controls table exactly:
-            --   Throttle = Up, Throttle2 = W, ContlrThrottle = ButtonR2
-            --   Brake    = Down, Brake2  = S, ContlrBrake    = ButtonL2
-            -- gasVal > Deadzone is the mobile fallback (on-screen Gas button
-            -- writes to ThrottleFloat via seat input simulation).
-            local throttleHeld = _motoThrottle or (gasVal > Config.Deadzone)
-            local reverseHeld  = _motoReverse  or isRev
+            -- XZ (horizontal) forward speed — the definitive "is the bike
+            -- moving forward?" signal that works in every executor context.
+            local vel    = root.AssemblyLinearVelocity
+            local velFwd = vel:Dot(root.CFrame.LookVector)
 
-            -- Project look direction onto XZ (horizontal) plane — avoids
-            -- pushing the front wheel into the ground when bike is leaning.
+            -- XZ-plane speed for top-speed cap (excludes suspension bounce).
+            local xzSpeed = Vector3.new(vel.X, 0, vel.Z).Magnitude
+
+            -- Project look direction onto XZ plane for clean horizontal push.
             local lv   = root.CFrame.LookVector
             local flat = Vector3.new(lv.X, 0, lv.Z)
             if flat.Magnitude > 0.01 then flat = flat.Unit end
 
-            if throttleHeld and not reverseHeld then
-                local spd = root.AssemblyLinearVelocity.Magnitude
-                if spd < Config.MotoMaxSpeed then
+            -- Boost when moving forward and NOT braking / reversing.
+            if velFwd > 3 and not isRev then
+                if xzSpeed < Config.MotoMaxSpeed then
                     root.AssemblyLinearVelocity =
-                        root.AssemblyLinearVelocity + flat * Config.MotoAccel
+                        vel + flat * Config.MotoAccel
                     SetStatus(string.format(
-                        "🏍️ Moto Boost: %.0f / %d st/s", spd, Config.MotoMaxSpeed),
+                        "🏍️ Moto Boost: %.0f / %d st/s", xzSpeed, Config.MotoMaxSpeed),
                         0, 215, 80)
                 else
                     SetStatus(string.format(
-                        "🏍️ Moto Boost: MAX  %.0f st/s", spd),
+                        "🏍️ Moto Boost: MAX  %.0f st/s", xzSpeed),
                         255, 200, 0)
                 end
             else
-                SetStatus(reverseHeld and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
+                SetStatus(isRev and "🏍️ Reversing..." or "🏍️ Moto Boost: Idle")
             end
         end
     end
@@ -2173,7 +2140,7 @@ if loadGui then
 end
 
 print("\n═════════════════════════════════════════════════")
-print("[J50] Midnight Chasers — V50 Moto Raw Input Ready")
-print("[J50] Developed by josepedov")
-print("[J50] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
+print("[J51] Midnight Chasers — V51 Moto velFwd + XZ cap Ready")
+print("[J51] Developed by josepedov")
+print("[J51] Active Hooks: AutoRace, AutoFarm, MotoBoost, NoCrashDeath, Anti-AFK, Preloader+Streaming")
 print("═════════════════════════════════════════════════\n")
